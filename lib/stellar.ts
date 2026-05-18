@@ -1,0 +1,215 @@
+import {
+  Contract,
+  Networks,
+  TransactionBuilder,
+  BASE_FEE,
+  rpc as StellarRpc,
+  xdr,
+  nativeToScVal,
+  scValToNative,
+} from "@stellar/stellar-sdk";
+import {
+  getAddress,
+  signTransaction,
+  isConnected,
+  requestAccess,
+} from "@stellar/freighter-api";
+
+export const NETWORK_PASSPHRASE = Networks.TESTNET;
+export const RPC_URL = "https://soroban-testnet.stellar.org";
+export const CONTRACT_ID =
+  process.env.NEXT_PUBLIC_CONTRACT_ID ??
+  "CCZ6AE75C27DMB3SOIHK7WZSBUG3NQPVLHSVEBQ2FSAEVGRJ5TXAZWCX";
+export const NATIVE_TOKEN =
+  process.env.NEXT_PUBLIC_NATIVE_TOKEN ??
+  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+
+const server = new StellarRpc.Server(RPC_URL);
+
+// ---------- Wallet ----------
+
+export async function connectWallet(): Promise<string> {
+  const connected = await isConnected();
+  if (!connected) throw new Error("Freighter not found. Install from freighter.app");
+  await requestAccess();
+  const result = await getAddress();
+  if (!result?.address) throw new Error("Could not get address from Freighter");
+  return result.address;
+}
+
+// ---------- Read ----------
+
+async function simulate(method: string, args: xdr.ScVal[]): Promise<xdr.ScVal> {
+  const contract = new Contract(CONTRACT_ID);
+  const account = await server.getAccount(
+    "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN"
+  );
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call(method, ...args))
+    .setTimeout(30)
+    .build();
+
+  const result = await server.simulateTransaction(tx);
+  if (StellarRpc.Api.isSimulationError(result)) throw new Error((result as any).error);
+  return (result as any).result!.retval;
+}
+
+export async function getSchedule(id: number): Promise<ScheduleData | null> {
+  try {
+    const val = await simulate("get_schedule", [nativeToScVal(id, { type: "u64" })]);
+    return parseSchedule(scValToNative(val));
+  } catch { return null; }
+}
+
+export async function getScheduleCount(): Promise<number> {
+  try {
+    const val = await simulate("schedule_count", []);
+    return Number(scValToNative(val));
+  } catch { return 0; }
+}
+
+export async function getClaimable(id: number): Promise<bigint> {
+  try {
+    const val = await simulate("claimable", [nativeToScVal(id, { type: "u64" })]);
+    return BigInt(scValToNative(val));
+  } catch { return 0n; }
+}
+
+export async function getAllSchedules(): Promise<ScheduleData[]> {
+  const count = await getScheduleCount();
+  const results = await Promise.all(
+    Array.from({ length: count }, (_, i) => getSchedule(i + 1))
+  );
+  return results.filter(Boolean) as ScheduleData[];
+}
+
+// ---------- Write ----------
+
+async function buildAndSend(publicKey: string, method: string, args: xdr.ScVal[]): Promise<string> {
+  const contract = new Contract(CONTRACT_ID);
+  const account = await server.getAccount(publicKey);
+  let tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call(method, ...args))
+    .setTimeout(30)
+    .build();
+
+  const simResult = await server.simulateTransaction(tx);
+  if (StellarRpc.Api.isSimulationError(simResult)) throw new Error((simResult as any).error);
+  tx = StellarRpc.assembleTransaction(tx, simResult as any).build();
+
+  const signed = await signTransaction(tx.toXDR(), { networkPassphrase: NETWORK_PASSPHRASE });
+  const xdrStr = typeof signed === "string" ? signed : (signed as any).signedTxXdr;
+  const submitted = await server.sendTransaction(
+    TransactionBuilder.fromXDR(xdrStr, NETWORK_PASSPHRASE)
+  );
+  if (submitted.status === "ERROR") throw new Error("Transaction failed");
+
+  let status: any = { status: "PENDING" };
+  while (status.status === "PENDING" || status.status === "NOT_FOUND") {
+    await new Promise((r) => setTimeout(r, 1000));
+    status = await server.getTransaction(submitted.hash);
+  }
+  return submitted.hash;
+}
+
+export async function createSchedule(
+  publicKey: string,
+  beneficiary: string,
+  totalAmountXlm: number,
+  startTime: number,
+  durationDays: number,
+  cliffDays: number,
+  kind: "Linear" | "Cliff",
+  revocable: boolean
+): Promise<string> {
+  const totalStroops = BigInt(Math.round(totalAmountXlm * 10_000_000));
+  const durationSecs = durationDays * 86400;
+  const cliffSecs = cliffDays * 86400;
+
+  const kindVal = kind === "Linear"
+    ? xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Linear")])
+    : xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Cliff")]);
+
+  const args: xdr.ScVal[] = [
+    nativeToScVal(publicKey, { type: "address" }),
+    nativeToScVal(beneficiary, { type: "address" }),
+    nativeToScVal(NATIVE_TOKEN, { type: "address" }),
+    nativeToScVal(totalStroops, { type: "i128" }),
+    nativeToScVal(startTime, { type: "u64" }),
+    nativeToScVal(durationSecs, { type: "u64" }),
+    nativeToScVal(cliffSecs, { type: "u64" }),
+    kindVal,
+    nativeToScVal(revocable, { type: "bool" }),
+  ];
+  return buildAndSend(publicKey, "create_schedule", args);
+}
+
+export async function claimVested(publicKey: string, scheduleId: number): Promise<string> {
+  return buildAndSend(publicKey, "claim", [nativeToScVal(scheduleId, { type: "u64" })]);
+}
+
+export async function revokeSchedule(publicKey: string, scheduleId: number): Promise<string> {
+  return buildAndSend(publicKey, "revoke", [nativeToScVal(scheduleId, { type: "u64" })]);
+}
+
+// ---------- Types ----------
+
+export interface ScheduleData {
+  id: number;
+  grantor: string;
+  beneficiary: string;
+  token: string;
+  total_amount: bigint;
+  claimed: bigint;
+  start_time: number;
+  duration: number;
+  cliff_duration: number;
+  kind: "Linear" | "Cliff";
+  revocable: boolean;
+  revoked: boolean;
+}
+
+function parseSchedule(raw: any): ScheduleData {
+  return {
+    id: Number(raw.id),
+    grantor: raw.grantor?.toString() ?? "",
+    beneficiary: raw.beneficiary?.toString() ?? "",
+    token: raw.token?.toString() ?? "",
+    total_amount: BigInt(raw.total_amount ?? 0),
+    claimed: BigInt(raw.claimed ?? 0),
+    start_time: Number(raw.start_time ?? 0),
+    duration: Number(raw.duration ?? 0),
+    cliff_duration: Number(raw.cliff_duration ?? 0),
+    kind: raw.kind === "Cliff" ? "Cliff" : "Linear",
+    revocable: Boolean(raw.revocable),
+    revoked: Boolean(raw.revoked),
+  };
+}
+
+// ---------- Helpers ----------
+
+export function stroopsToXlm(s: bigint): string {
+  return (Number(s) / 10_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+export function truncate(addr: string): string {
+  return addr.length > 12 ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : addr;
+}
+
+export function vestingProgress(s: ScheduleData, now: number): number {
+  if (now < s.start_time) return 0;
+  const elapsed = now - s.start_time;
+  return Math.min(100, Math.round((elapsed / s.duration) * 100));
+}
+
+export function formatDate(ts: number): string {
+  return new Date(ts * 1000).toLocaleDateString(undefined, {
+    year: "numeric", month: "short", day: "numeric",
+  });
+}
