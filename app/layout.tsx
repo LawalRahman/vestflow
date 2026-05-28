@@ -7,10 +7,19 @@ export const metadata: Metadata = {
   description: "Create and manage token vesting schedules on the Stellar network using Soroban smart contracts.",
 };
 
+// Inlined before React hydration so the correct class is applied
+// synchronously — avoids a flash of the wrong theme.
+const themeScript = `(function(){try{var t=localStorage.getItem('vestflow-theme');if(t==='light'){document.documentElement.classList.remove('dark');}else{document.documentElement.classList.add('dark');}}catch(e){document.documentElement.classList.add('dark');}})();`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-[#08090f] text-white antialiased" style={{ fontFamily: "system-ui, sans-serif" }}>
+    // suppressHydrationWarning prevents React from complaining when the
+    // inline script mutates the class attribute before hydration.
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-screen antialiased" style={{ fontFamily: "system-ui, sans-serif" }}>
         <WalletProvider>{children}</WalletProvider>
       </body>
     </html>

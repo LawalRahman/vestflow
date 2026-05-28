@@ -1,16 +1,43 @@
 @import "tailwindcss";
 
+/* Enable class-based dark mode for Tailwind v4 */
+@variant dark (&:where(.dark, .dark *));
+
+/* ── CSS custom properties ─────────────────────────────────────────── */
+
+/* Light mode defaults (applied when .dark class is absent) */
 :root {
+  --background: #f4f4f5;
+  --foreground: #09090b;
+  --card-bg: rgba(0, 0, 0, 0.03);
+  --card-border: rgba(0, 0, 0, 0.08);
+  --input-bg: rgba(0, 0, 0, 0.04);
+  --input-border: rgba(0, 0, 0, 0.12);
+  --muted: #71717a;
+}
+
+/* Dark mode (applied when <html> has the .dark class) */
+.dark {
   --background: #08090f;
   --foreground: #f0f0f0;
+  --card-bg: rgba(255, 255, 255, 0.03);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --input-bg: rgba(255, 255, 255, 0.04);
+  --input-border: rgba(255, 255, 255, 0.1);
+  --muted: #52525b;
 }
+
+/* ── Base ───────────────────────────────────────────────────────────── */
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans, sans-serif);
   -webkit-font-smoothing: antialiased;
+  transition: background 0.2s, color 0.2s;
 }
+
+/* ── Utility classes ────────────────────────────────────────────────── */
 
 .gradient-text {
   background: linear-gradient(135deg, #7c3aed, #06b6d4);
@@ -20,8 +47,8 @@ body {
 }
 
 .card {
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
   border-radius: 1rem;
 }
 
@@ -36,16 +63,15 @@ body {
 
 .input {
   width: 100%;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.1);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
   border-radius: 0.5rem;
   padding: 0.625rem 1rem;
   font-size: 0.875rem;
-  color: white;
+  color: var(--foreground);
   outline: none;
   transition: border-color 0.15s;
 }
 
 .input:focus { border-color: #7c3aed; }
-.input::placeholder { color: #52525b; }
-
+.input::placeholder { color: var(--muted); }
