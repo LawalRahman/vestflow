@@ -1,5 +1,5 @@
+import { getClaimable, getSchedule, NETWORK } from "@/lib/stellar";
 import { NextRequest, NextResponse } from "next/server";
-import { getSchedule, getClaimable, NETWORK } from "@/lib/stellar";
 
 export async function GET(
   request: NextRequest,

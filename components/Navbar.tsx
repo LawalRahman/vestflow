@@ -1,8 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import WalletButton from "./WalletButton";
 import { NETWORK } from "@/lib/stellar";
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import WalletButton from "./WalletButton";
 
 function SunIcon() {
   return (

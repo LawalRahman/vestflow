@@ -1,7 +1,7 @@
 "use client";
-import { useState } from "react";
 import Navbar from "@/components/Navbar";
 import Link from "next/link";
+import { useState } from "react";
 
 interface LearningModule {
   id: string;

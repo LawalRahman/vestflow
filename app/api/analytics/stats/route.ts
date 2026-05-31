@@ -1,9 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
 import {
-  getScheduleCount,
-  getAllSchedules,
-  getClaimableBulk,
+    getAllSchedules,
+    getClaimableBulk
 } from "@/lib/stellar";
+import { NextRequest, NextResponse } from "next/server";
 
 interface ProtocolStats {
   total_value_locked: string; // Total amount still locked in contract

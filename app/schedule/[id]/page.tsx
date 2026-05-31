@@ -1,11 +1,10 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import VestingChart from "@/components/VestingChart";
-import { formatDate } from "@/lib/stellar";
-import { NETWORK } from "@/lib/stellar";
+import { formatDate, NETWORK } from "@/lib/stellar";
 import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
 interface ScheduleData {
   id: number;

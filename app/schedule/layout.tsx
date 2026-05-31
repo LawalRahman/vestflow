@@ -1,5 +1,5 @@
-import { Metadata } from "next";
 import { getSchedule } from "@/lib/stellar";
+import { Metadata } from "next";
 
 export async function generateMetadata(
   { params }: { params: { id: string } }
