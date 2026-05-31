@@ -1,0 +1,11 @@
+pre-commit:
+  commands:
+    cargo_fmt:
+      root: "contracts/"
+      run: cargo fmt --check
+      glob: "*.rs"
+      stage_fixed: true
+    cargo_clippy:
+      root: "contracts/"
+      run: cargo clippy -- -D warnings
+      glob: "*.rs"

@@ -1,24 +1,40 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
 //! # VestFlow Contract
 //!
 //! Trustless token vesting schedules on Stellar / Soroban.
+//!
+//! ## Re-entrancy Invariant
+//!
+//! Soroban's host environment does not allow the classic EVM-style re-entrancy
+//! because a contract invocation runs to completion before any cross-contract
+//! call can trigger a new entry to the same contract.  Despite this guarantee
+//! we still include an explicit storage-level re-entrancy guard on the two
+//! state-mutating entry points — `claim` and `revoke` — as a defence-in-depth
+//! measure and to make the invariant visible in the code.
+//!
+//! The guard is a simple boolean flag stored under `DataKey::Locked`.  Every
+//! mutating entry point acquires the lock on entry and releases it on exit.
+//! If a nested call somehow tried to re-enter, the guard would panic with
+//! `"Re-entrant call detected"`.
 //!
 //! ## Error Messages
 //!
 //! The contract panics with plain string messages that callers can match on.
 //! All public-facing error strings are listed below.
 //!
-//! | Error string                | Triggered by                                                  |
-//! |-----------------------------|---------------------------------------------------------------|
-//! | `"Schedule not found"`      | `get_schedule`, `claim`, `revoke` with an unknown ID         |
-//! | `"Nothing to claim yet"`    | `claim` called before any tokens have vested                  |
-//! | `"Schedule has been revoked"` | `claim` called on a schedule that was already revoked       |
-//! | `"Schedule is not revocable"` | `revoke` called on an irrevocable schedule                  |
-//! | `"Already revoked"`         | `revoke` called a second time on the same schedule            |
-//! | `"Amount must be positive"` | `create_schedule` with `total_amount` ≤ 0                    |
-//! | `"Duration must be positive"` | `create_schedule` with `duration` = 0                      |
-//! | `"Cliff cannot exceed duration"` | `create_schedule` with `cliff_duration` > `duration`    |
+//! | Error string                    | Triggered by                                                     |
+//! |---------------------------------|------------------------------------------------------------------|
+//! | `"Schedule not found"`          | `get_schedule`, `claim`, `revoke` with an unknown ID             |
+//! | `"Nothing to claim yet"`        | `claim` called before any tokens have vested                     |
+//! | `"Schedule has been revoked"`    | `claim` called on a schedule that was already revoked            |
+//! | `"Schedule is not revocable"`   | `revoke` called on an irrevocable schedule                       |
+//! | `"Already revoked"`             | `revoke` called a second time on the same schedule               |
+//! | `"Amount must be positive"`     | `create_schedule` with `total_amount` ≤ 0                        |
+//! | `"Duration must be positive"`   | `create_schedule` with `duration` = 0                            |
+//! | `"Cliff cannot exceed duration"`| `create_schedule` with `cliff_duration` > `duration`             |
+//! | `"Re-entrant call detected"`    | A state-mutating entry point is called while already executing   |
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, vec, Address, Env, Vec,
@@ -29,6 +45,9 @@ use soroban_sdk::{
 pub enum DataKey {
     Schedule(u64),
     ScheduleCount,
+    /// Re-entrancy guard flag.
+    /// Set to `true` while a state-mutating entry point is executing.
+    Locked,
 }
 
 /// The type of vesting curve applied to a schedule.
@@ -126,7 +145,11 @@ impl VestingSchedule {
     /// Tokens vested but not yet claimed.
     pub fn claimable_at(&self, now: u64) -> i128 {
         let vested = self.vested_at(now);
-        if vested > self.claimed { vested - self.claimed } else { 0 }
+        if vested > self.claimed {
+            vested - self.claimed
+        } else {
+            0
+        }
     }
 }
 
@@ -135,6 +158,22 @@ pub struct VestFlowContract;
 
 #[contractimpl]
 impl VestFlowContract {
+    /// Acquire the re-entrancy lock.
+    ///
+    /// Panics with `"Re-entrant call detected"` if the lock is already held.
+    fn acquire_lock(env: &Env) {
+        assert!(
+            !env.storage().instance().has(&DataKey::Locked),
+            "Re-entrant call detected"
+        );
+        env.storage().instance().set(&DataKey::Locked, &true);
+    }
+
+    /// Release the re-entrancy lock.
+    fn release_lock(env: &Env) {
+        env.storage().instance().remove(&DataKey::Locked);
+    }
+
     /// Create a new vesting schedule and lock the tokens into the contract.
     ///
     /// The grantor must approve the contract to transfer `total_amount` of
@@ -161,10 +200,7 @@ impl VestFlowContract {
 
         assert!(total_amount > 0, "Amount must be positive");
         assert!(duration > 0, "Duration must be positive");
-        assert!(
-            cliff_duration <= duration,
-            "Cliff cannot exceed duration"
-        );
+        assert!(cliff_duration <= duration, "Cliff cannot exceed duration");
 
         let count: u64 = env
             .storage()
@@ -175,11 +211,7 @@ impl VestFlowContract {
 
         // Pull tokens from grantor into the contract
         let contract_address = env.current_contract_address();
-        token::Client::new(&env, &token).transfer(
-            &grantor,
-            &contract_address,
-            &total_amount,
-        );
+        token::Client::new(&env, &token).transfer(&grantor, &contract_address, &total_amount);
 
         let schedule = VestingSchedule {
             id,
@@ -196,10 +228,13 @@ impl VestFlowContract {
             revoked: false,
         };
 
-        env.storage().instance().set(&DataKey::Schedule(id), &schedule);
+        env.storage()
+            .instance()
+            .set(&DataKey::Schedule(id), &schedule);
         env.storage().instance().set(&DataKey::ScheduleCount, &id);
 
-        env.events().publish((symbol_short!("created"), grantor), id);
+        env.events()
+            .publish((symbol_short!("created"), grantor), id);
 
         id
     }
@@ -212,6 +247,8 @@ impl VestFlowContract {
     /// Panics with `"Schedule has been revoked"` if the schedule was revoked.
     /// Panics with `"Nothing to claim yet"` if no tokens are currently claimable.
     pub fn claim(env: Env, schedule_id: u64) {
+        Self::acquire_lock(&env);
+
         let mut schedule: VestingSchedule = env
             .storage()
             .instance()
@@ -234,11 +271,15 @@ impl VestFlowContract {
             &claimable,
         );
 
-        env.storage().instance().set(&DataKey::Schedule(schedule_id), &schedule);
+        env.storage()
+            .instance()
+            .set(&DataKey::Schedule(schedule_id), &schedule);
         env.events().publish(
             (symbol_short!("claimed"), schedule.beneficiary.clone()),
             (schedule_id, claimable),
         );
+
+        Self::release_lock(&env);
     }
 
     /// Revoke a vesting schedule (grantor only, revocable schedules only).
@@ -251,6 +292,8 @@ impl VestFlowContract {
     /// Panics with `"Schedule is not revocable"` if the schedule is irrevocable.
     /// Panics with `"Already revoked"` if the schedule has already been revoked.
     pub fn revoke(env: Env, schedule_id: u64) {
+        Self::acquire_lock(&env);
+
         let mut schedule: VestingSchedule = env
             .storage()
             .instance()
@@ -277,11 +320,15 @@ impl VestFlowContract {
             );
         }
 
-        env.storage().instance().set(&DataKey::Schedule(schedule_id), &schedule);
+        env.storage()
+            .instance()
+            .set(&DataKey::Schedule(schedule_id), &schedule);
         env.events().publish(
             (symbol_short!("revoked"), schedule.grantor.clone()),
             (schedule_id, unvested),
         );
+
+        Self::release_lock(&env);
     }
 
     /// Read a vesting schedule by ID.
@@ -390,8 +437,15 @@ mod test {
 
         set_time(&env, 1000);
         let id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &1000, &1000, &0, &VestingKind::Linear, &true,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &1000,
+            &1000,
+            &0,
+            &VestingKind::Linear,
+            &true,
         );
 
         // Halfway through vesting
@@ -416,8 +470,15 @@ mod test {
 
         set_time(&env, 0);
         let id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &0, &1000, &500, &VestingKind::Cliff, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &0,
+            &1000,
+            &500,
+            &VestingKind::Cliff,
+            &false,
         );
 
         // Before cliff
@@ -440,8 +501,15 @@ mod test {
 
         set_time(&env, 0);
         let id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &0, &1000, &0, &VestingKind::Linear, &true,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &0,
+            &1000,
+            &0,
+            &VestingKind::Linear,
+            &true,
         );
 
         // 25% vested, beneficiary claims
@@ -464,8 +532,15 @@ mod test {
 
         set_time(&env, 0);
         let id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &1000, &1000, &0, &VestingKind::Linear, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &1000,
+            &1000,
+            &0,
+            &VestingKind::Linear,
+            &false,
         );
         client.claim(&id);
     }
@@ -479,8 +554,15 @@ mod test {
 
         set_time(&env, 0);
         let id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &0, &1000, &0, &VestingKind::Linear, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &0,
+            &1000,
+            &0,
+            &VestingKind::Linear,
+            &false,
         );
         client.revoke(&id);
     }
@@ -496,8 +578,15 @@ mod test {
         // 1000s duration, 400s cliff
         set_time(&env, 0);
         let id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &0, &1000, &400, &VestingKind::LinearWithCliff, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &0,
+            &1000,
+            &400,
+            &VestingKind::LinearWithCliff,
+            &false,
         );
 
         // Before cliff: nothing claimable
@@ -515,8 +604,15 @@ mod test {
         // 1000s duration, 400s cliff → 600s linear window
         set_time(&env, 0);
         let id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1200, &0, &1000, &400, &VestingKind::LinearWithCliff, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1200,
+            &0,
+            &1000,
+            &400,
+            &VestingKind::LinearWithCliff,
+            &false,
         );
 
         // At cliff: 0/600 through linear window → 0 tokens
@@ -548,13 +644,27 @@ mod test {
         set_time(&env, 0);
         // Schedule 1: 1000 tokens, 1000s linear
         let id1 = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &0, &1000, &0, &VestingKind::Linear, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &0,
+            &1000,
+            &0,
+            &VestingKind::Linear,
+            &false,
         );
         // Schedule 2: 2000 tokens, 1000s cliff at 500s
         let id2 = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &2000, &0, &1000, &500, &VestingKind::Cliff, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &2000,
+            &0,
+            &1000,
+            &500,
+            &VestingKind::Cliff,
+            &false,
         );
 
         // At t=500: id1 has 500 claimable, id2 has 2000 claimable (cliff hit)
@@ -573,8 +683,15 @@ mod test {
 
         set_time(&env, 0);
         let _id = client.create_schedule(
-            &grantor, &beneficiary, &token_addr,
-            &1000, &0, &1000, &0, &VestingKind::Linear, &false,
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &0,
+            &1000,
+            &0,
+            &VestingKind::Linear,
+            &false,
         );
 
         // ID 999 does not exist — should return 0, not panic
