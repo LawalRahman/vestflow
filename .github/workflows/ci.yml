@@ -71,6 +71,11 @@ jobs:
           cd indexer
           npm run build
 
+      - name: Run indexer pagination test
+        run: |
+          cd indexer
+          npm run test:pagination
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
