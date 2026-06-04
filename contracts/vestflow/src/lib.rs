@@ -33,6 +33,7 @@
 //! | `"Amount must be positive"`     | `create_schedule` with `total_amount` ≤ 0                        |
 //! | `"Duration must be positive"`   | `create_schedule` with `duration` = 0                            |
 //! | `"Cliff cannot exceed duration"`| `create_schedule` with `cliff_duration` > `duration`             |
+//! | `"Lockup cannot be less than cliff"` | `create_schedule` with `lockup_duration` < `cliff_duration`   |
 //! | `"Beneficiary must differ from grantor"` | `create_schedule` with `beneficiary == grantor`                 |
 //! | `"Re-entrant call detected"`    | A state-mutating entry point is called while already executing   |
 //! | `"Upgrade authority already initialized"` | `initialize_upgrade_authority` called more than once |
@@ -41,6 +42,37 @@
 //! | `"No pending upgrade"` | Upgrade execution/cancellation attempted without an announcement |
 //! | `"Upgrade timelock still active"` | Upgrade execution attempted before 48 hours elapsed |
 //! | `"Upgrade executable time overflow"` | Upgrade announcement timestamp cannot safely add the timelock |
+//!
+//! ## Events
+//!
+//! All state transitions emit structured events for indexers and monitoring systems.
+//!
+//! | Event Name    | Topics                                    | Data                                                                                      |
+//! |---------------|-------------------------------------------|-------------------------------------------------------------------------------------------|
+//! | `created`     | (symbol, schedule_id)                     | (grantor, beneficiary, token, amount, start, duration, cliff, lockup, kind, revocable)    |
+//! | `claimed`     | (symbol, schedule_id)                     | (beneficiary, token, amount_claimed, total_claimed, timestamp)                            |
+//! | `revoked`     | (symbol, schedule_id)                     | (grantor, token, unvested_amount, vested_amount, timestamp)                               |
+//! | `paused`      | (symbol, schedule_id)                     | (grantor, paused_at)                                                                      |
+//! | `resumed`     | (symbol, schedule_id)                     | (grantor, pause_duration, timestamp)                                                      |
+//! | `bnf_chng`    | (symbol, schedule_id)                     | (old_beneficiary, new_beneficiary, timestamp)                                             |
+//! | `upgr_auth`   | (symbol, authority_address)               | timestamp                                                                                 |
+//! | `upgr_ann`    | (symbol, authority)                       | (wasm_hash, announced_at, executable_at)                                                  |
+//! | `upgr_exe`    | (symbol, authority)                       | (wasm_hash, announced_at, executable_at)                                                  |
+//! | `upgr_can`    | (symbol, authority)                       | (wasm_hash, announced_at, executable_at)                                                  |
+//! | `orc_init`    | (symbol, oracle_address)                  | timestamp                                                                                 |
+//! | `mile_en`     | (symbol, schedule_id)                     | (grantor, milestone_count, timestamp)                                                     |
+//! | `mile_att`    | (symbol, schedule_id)                     | (oracle, milestone_index, timestamp)                                                      |
+//! | `nft_init`    | (symbol, nft_contract)                    | timestamp                                                                                 |
+//!
+//! ## SAC Token Support
+//!
+//! The contract supports any Stellar Asset Contract (SAC) token, including:
+//! - Native XLM (wrapped as SAC)
+//! - Classic Stellar assets (wrapped as SAC)
+//! - Custom Soroban tokens implementing the token interface
+//!
+//! Token contracts must implement the standard `transfer` function. The contract
+//! verifies token transfers succeed and stores the token address in each schedule.
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, vec, Address, BytesN,
