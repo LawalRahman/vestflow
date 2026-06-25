@@ -1,5 +1,60 @@
-import { getClaimable, getSchedule, NETWORK } from "@/lib/stellar";
+import { getClaimable, getSchedule, NETWORK, vestingProgress } from "@/lib/stellar";
 import { NextRequest, NextResponse } from "next/server";
+
+interface EventHistoryItem {
+  type: "created" | "claimed" | "revoked";
+  timestamp: number;
+  amount?: string;
+  actor: string;
+  ledger?: number;
+}
+
+function calculateNextUnlock(schedule: any, now: number): number | null {
+  if (schedule.revoked) return null;
+  
+  const endTime = schedule.start_time + schedule.duration;
+  if (now >= endTime) return null;
+  
+  if (schedule.kind === "Cliff") {
+    const cliffTime = schedule.start_time + schedule.cliff_duration;
+    if (now < cliffTime) return cliffTime;
+    return null;
+  }
+  
+  if (schedule.kind === "LinearWithCliff") {
+    const cliffTime = schedule.start_time + schedule.cliff_duration;
+    if (now < cliffTime) return cliffTime;
+    return endTime;
+  }
+  
+  return endTime;
+}
+
+function calculateVestedAmount(schedule: any, now: number): bigint {
+  if (schedule.revoked) return schedule.claimed;
+  if (now < schedule.start_time) return 0n;
+
+  const elapsed = now - schedule.start_time;
+
+  switch (schedule.kind) {
+    case "Cliff": {
+      if (elapsed >= schedule.cliff_duration) return schedule.total_amount;
+      return 0n;
+    }
+    case "LinearWithCliff": {
+      if (elapsed < schedule.cliff_duration) return 0n;
+      if (elapsed >= schedule.duration) return schedule.total_amount;
+      const linearDuration = schedule.duration - schedule.cliff_duration;
+      const linearElapsed = elapsed - schedule.cliff_duration;
+      return (schedule.total_amount * BigInt(linearElapsed)) / BigInt(linearDuration);
+    }
+    case "Linear":
+    default: {
+      if (elapsed >= schedule.duration) return schedule.total_amount;
+      return (schedule.total_amount * BigInt(elapsed)) / BigInt(schedule.duration);
+    }
+  }
+}
 
 export async function GET(
   request: NextRequest,
@@ -25,13 +80,48 @@ export async function GET(
       );
     }
 
+    const now = Math.floor(Date.now() / 1000);
     const claimable = await getClaimable(scheduleId);
+    const vested = calculateVestedAmount(schedule, now);
+    const progress = vestingProgress(schedule, now);
+    const nextUnlock = calculateNextUnlock(schedule, now);
+
+    const eventHistory: EventHistoryItem[] = [
+      {
+        type: "created",
+        timestamp: schedule.start_time,
+        amount: schedule.total_amount.toString(),
+        actor: schedule.grantor,
+      }
+    ];
+
+    const currentState = {
+      status: schedule.revoked 
+        ? "revoked" 
+        : progress >= 100 
+        ? "fully_vested" 
+        : now < schedule.start_time 
+        ? "pending" 
+        : "vesting",
+      progress,
+      vestedAmount: vested.toString(),
+      claimableAmount: claimable.toString(),
+      remainingAmount: (schedule.total_amount - schedule.claimed).toString(),
+      unclaimedVested: (vested - schedule.claimed).toString(),
+    };
 
     return NextResponse.json(
       {
-        schedule,
-        claimable: claimable.toString(),
+        schedule: {
+          ...schedule,
+          total_amount: schedule.total_amount.toString(),
+          claimed: schedule.claimed.toString(),
+        },
+        currentState,
+        nextUnlockTimestamp: nextUnlock,
+        eventHistory,
         network: NETWORK,
+        timestamp: now,
       },
       {
         headers: {
