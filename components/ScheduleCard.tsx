@@ -8,16 +8,12 @@ import {
   vestingProgress,
   formatDate,
   formatCliffDate,
-  claimVested,
-  revokeSchedule,
-  parseContractError,
-  NETWORK,
   NATIVE_TOKEN,
 } from "@/lib/stellar";
 import { useWallet } from "@/lib/WalletContext";
-import { useToast } from "@/components/Toast";
 import CopyButton from "@/components/CopyButton";
 import ClaimModal from "@/components/ClaimModal";
+import RevokeModal from "@/components/RevokeModal";
 import VestingChart from "@/components/VestingChart";
 import { useXlmPrice, formatUsd } from "@/lib/price";
 
@@ -29,10 +25,9 @@ export default function ScheduleCard({
   onAction: () => void;
 }) {
   const { publicKey } = useWallet();
-  const { addToast, updateToast } = useToast();
-  const [loading, setLoading] = useState<"claim" | "revoke" | null>(null);
   const [showChart, setShowChart] = useState(false);
   const [showClaimModal, setShowClaimModal] = useState(false);
+  const [showRevokeModal, setShowRevokeModal] = useState(false);
   const xlmPrice = useXlmPrice();
 
   const now = Math.floor(Date.now() / 1000);
@@ -59,70 +54,6 @@ export default function ScheduleCard({
   // SEP-41 token symbol support
   const isNative = schedule.token === NATIVE_TOKEN;
   const tokenSymbol = isNative ? "XLM" : `Token (${truncate(schedule.token, 4, 4)})`;
-
-  // ── Claim ──────────────────────────────────────────────────────────────────
-  const handleClaim = async () => {
-    if (!publicKey) return;
-    setLoading("claim");
-
-    const toastId = addToast({
-      status: "pending",
-      title: "Claim pending…",
-      message: "Waiting for transaction to confirm.",
-    });
-
-    try {
-      const hash = await claimVested(publicKey, schedule.id);
-      updateToast(toastId, {
-        status: "success",
-        title: "Tokens claimed!",
-        message: `${stroopsToXlm(claimableAmt)} ${tokenSymbol} transferred to your wallet.`,
-        txHash: hash,
-        network: NETWORK,
-      });
-      onAction();
-    } catch (e: any) {
-      updateToast(toastId, {
-        status: "error",
-        title: "Claim failed",
-        message: parseContractError(e),
-      });
-    } finally {
-      setLoading(null);
-    }
-  };
-
-  // ── Revoke ─────────────────────────────────────────────────────────────────
-  const handleRevoke = async () => {
-    if (!publicKey) return;
-    setLoading("revoke");
-
-    const toastId = addToast({
-      status: "pending",
-      title: "Revoke pending…",
-      message: "Waiting for transaction to confirm.",
-    });
-
-    try {
-      const hash = await revokeSchedule(publicKey, schedule.id);
-      updateToast(toastId, {
-        status: "success",
-        title: "Schedule revoked",
-        message: "Unvested tokens have been returned.",
-        txHash: hash,
-        network: NETWORK,
-      });
-      onAction();
-    } catch (e: any) {
-      updateToast(toastId, {
-        status: "error",
-        title: "Revoke failed",
-        message: parseContractError(e),
-      });
-    } finally {
-      setLoading(null);
-    }
-  };
 
   const statusColor = schedule.revoked
     ? "bg-red-500/10 text-red-400"
@@ -270,11 +201,10 @@ export default function ScheduleCard({
           )}
           {isGrantor && schedule.revocable && progress < 100 && (
             <button
-              onClick={handleRevoke}
-              disabled={!!loading}
-              className="text-xs rounded-lg px-3 py-1.5 border border-red-500/30 text-red-400 hover:border-red-500/60 transition-colors disabled:opacity-60"
+              onClick={() => setShowRevokeModal(true)}
+              className="text-xs rounded-lg px-3 py-1.5 border border-red-500/30 text-red-400 hover:border-red-500/60 transition-colors"
             >
-              {loading === "revoke" ? "Processing…" : "Revoke"}
+              Revoke
             </button>
           )}
         </div>
@@ -287,6 +217,14 @@ export default function ScheduleCard({
         open={showClaimModal}
         onClose={() => setShowClaimModal(false)}
         onSuccess={() => { setShowClaimModal(false); onAction(); }}
+      />
+      <RevokeModal
+        schedule={schedule}
+        vestedAmt={vested}
+        tokenSymbol={tokenSymbol}
+        open={showRevokeModal}
+        onClose={() => setShowRevokeModal(false)}
+        onSuccess={() => { setShowRevokeModal(false); onAction(); }}
       />
     </div>
   );

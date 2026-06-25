@@ -18,7 +18,7 @@ import {
   formatDate,
 } from "@/lib/stellar";
 import { useWallet } from "@/lib/WalletContext";
-import { useCountUp } from "@/lib/useCountUp";
+import { useCountUp } from "@/hooks/useCountUp";
 import Link from "next/link";
 import { useXlmPrice, formatUsd } from "@/lib/price";
 import { buildCombinedExportCSV, downloadCSV } from "@/lib/csvExport";
