@@ -15,7 +15,7 @@ Stellar RPC (getEvents)
         │  decodes ScVal topics/values to JSON
         │  writes idempotently via INSERT OR IGNORE
         ▼
-  vestflow-events.db      ← SQLite (WAL mode)
+  vestflow-events-*.db    ← SQLite per network (WAL mode)
   schema: schedule_events + checkpoint
         │
         ▼
@@ -44,9 +44,9 @@ custom Soroban contract events.
 
 | `event_type`       | Topics parsed              | Notes                          |
 |--------------------|----------------------------|--------------------------------|
-| `schedule_created` | `[tag, id, grantor, bene]` | Emitted on `create_schedule`   |
-| `claimed`          | `[tag, id, bene, amount]`  | Emitted on `claim`; amount in stroops |
-| `revoked`          | `[tag, id, grantor]`       | Emitted on `revoke`            |
+| `schedule_created` | topics `[created, id]`, value includes grantor, beneficiary, token, amount | Emitted on `create_schedule` |
+| `claimed`          | topics `[claimed, beneficiary, token]`, value includes schedule ID and amount | Emitted on `claim` |
+| `revoked`          | topics `[revoked, grantor, token]`, value includes schedule ID and unvested amount | Emitted on `revoke` |
 | `unknown`          | raw JSON stored            | Future-proofs new event types  |
 
 ---
@@ -71,7 +71,11 @@ npm run dev          # poller
 npm run dev:server   # query HTTP server
 ```
 
-The Next.js app proxies `/api/events` → `http://localhost:3001/events`.
+The Next.js app proxies `/api/events` and `/api/stats/tvl` to the indexer.
+Pass `?network=testnet|mainnet` to select the indexed network.
+Any other value is rejected with HTTP 400 rather than silently reading the
+wrong network. Run one poller process per network (with its own
+`INDEXER_NETWORK`); the query server reads both per-network databases.
 
 ### Production
 
@@ -83,8 +87,9 @@ npm start          # poller (keep alive with PM2 / systemd / fly.io)
 npm run start:server  # query server
 ```
 
-Set `INDEXER_URL` in your Next.js deployment environment to point at
-the running query server so `/api/events` resolves correctly.
+Set `INDEXER_URL` in your Next.js deployment environment to point at the
+running query server, or set `INDEXER_TESTNET_URL` and `INDEXER_MAINNET_URL`
+when the networks are served by separate indexer deployments.
 
 ---
 
@@ -95,7 +100,7 @@ Base URL: `http://localhost:3001` (local) or your deployed service URL.
 ### `GET /health`
 
 ```json
-{ "ok": true, "checkpoint": 5678901 }
+{ "ok": true, "network": "testnet", "checkpoint": 5678901 }
 ```
 
 ### `GET /events`
@@ -113,10 +118,11 @@ All parameters optional:
 | `to_ledger`  | number | Upper ledger bound (inclusive)             |
 | `limit`      | number | Max results (default 50, max 200)          |
 | `offset`     | number | Pagination offset (default 0)              |
+| `network`    | string | `testnet` or `mainnet` (default `testnet`) |
 
 **Example:**
 ```
-GET /events?address=GABC...&event_type=claimed&limit=20
+GET /events?network=testnet&address=GABC...&event_type=claimed&limit=20
 ```
 
 **Response:**
@@ -137,7 +143,37 @@ GET /events?address=GABC...&event_type=claimed&limit=20
       "created_at": 1748779200
     }
   ],
+  "network": "testnet",
   "checkpoint": 5678901
+}
+```
+
+### `GET /stats/tvl`
+
+Aggregates total value locked per asset from indexed schedule creation,
+claim, and revoke events.
+
+**Example:**
+```
+GET /stats/tvl?network=testnet
+```
+
+**Response:**
+```json
+{
+  "network": "testnet",
+  "assets": [
+    {
+      "asset": "CDLZ...",
+      "total_created": "10000000",
+      "total_claimed": "2500000",
+      "total_revoked_unvested": "0",
+      "total_value_locked": "7500000",
+      "active_schedules": 3
+    }
+  ],
+  "total_value_locked": "7500000",
+  "last_updated": 1766534400
 }
 ```
 

@@ -12,7 +12,8 @@
 
 import http from "http";
 import { URL } from "url";
-import { queryEvents, getCheckpoint } from "./db";
+import { queryEvents, getCheckpoint, getTvlStats } from "./db";
+import { parseNetwork, type NetworkName } from "./config";
 import type { EventQueryParams } from "./types";
 
 const PORT = Number(process.env.INDEXER_PORT ?? "3001");
@@ -52,14 +53,23 @@ const server = http.createServer((req, res) => {
   }
 
   const { pathname, searchParams } = parsed;
+  let network: NetworkName;
+  try {
+    network = parseNetwork(searchParams.get("network"));
+  } catch {
+    return json(res, 400, {
+      error: "network must be either mainnet or testnet",
+    });
+  }
 
   if (pathname === "/health") {
-    return json(res, 200, { ok: true, checkpoint: getCheckpoint() });
+    return json(res, 200, { ok: true, network, checkpoint: getCheckpoint(network) });
   }
 
   if (pathname === "/events") {
     try {
       const params: EventQueryParams = {
+        network,
         address: searchParams.get("address") ?? undefined,
         grantor: searchParams.get("grantor") ?? undefined,
         beneficiary: searchParams.get("beneficiary") ?? undefined,
@@ -72,10 +82,19 @@ const server = http.createServer((req, res) => {
       };
 
       const events = queryEvents(params);
-      return json(res, 200, { events, checkpoint: getCheckpoint() });
+      return json(res, 200, { events, network, checkpoint: getCheckpoint(network) });
     } catch (err) {
       console.error("[server] Query error:", err);
       return json(res, 500, { error: "Query failed" });
+    }
+  }
+
+  if (pathname === "/stats/tvl") {
+    try {
+      return json(res, 200, getTvlStats(network));
+    } catch (err) {
+      console.error("[server] TVL query error:", err);
+      return json(res, 500, { error: "TVL query failed" });
     }
   }
 
@@ -86,6 +105,7 @@ server.listen(PORT, () => {
   console.log(`[server] Indexer query API → http://localhost:${PORT}`);
   console.log(`[server]   GET /health`);
   console.log(
-    `[server]   GET /events?address=G...&event_type=claimed&limit=50`
+    `[server]   GET /events?network=testnet&address=G...&event_type=claimed&limit=50`
   );
+  console.log(`[server]   GET /stats/tvl?network=testnet`);
 });

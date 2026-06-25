@@ -16,6 +16,7 @@ import {
 } from "@/lib/stellar";
 import { useWallet } from "@/lib/WalletContext";
 import { useToast } from "@/components/Toast";
+import CopyButton from "@/components/CopyButton";
 import VestingChart from "@/components/VestingChart";
 import { useXlmPrice, formatUsd } from "@/lib/price";
 

@@ -9,15 +9,10 @@
 //!
 //! Soroban's host environment does not allow the classic EVM-style re-entrancy
 //! because a contract invocation runs to completion before any cross-contract
-//! call can trigger a new entry to the same contract.  Despite this guarantee
-//! we still include an explicit storage-level re-entrancy guard on the two
-//! state-mutating entry points — `claim` and `revoke` — as a defence-in-depth
-//! measure and to make the invariant visible in the code.
-//!
-//! The guard is a simple boolean flag stored under `DataKey::Locked`.  Every
-//! mutating entry point acquires the lock on entry and releases it on exit.
-//! If a nested call somehow tried to re-enter, the guard would panic with
-//! `"Re-entrant call detected"`.
+//! call can trigger a new entry to the same contract. State-mutating entry
+//! points therefore avoid an explicit storage-backed re-entrancy guard, keeping
+//! `claim` and `revoke` cheaper by avoiding two unnecessary instance storage
+//! writes per invocation.
 //!
 //! ## Error Messages
 //!
@@ -36,7 +31,6 @@
 //! | `"Lockup cannot be less than cliff"` | `create_schedule` with `lockup_duration` < `cliff_duration`   |
 //! | `"Beneficiary must differ from grantor"` | `create_schedule` with `beneficiary == grantor`                 |
 //! | `"Start time cannot be in the past"` | `create_schedule` or `create_graded_schedule` with `start_time` < current ledger time |
-//! | `"Re-entrant call detected"`    | A state-mutating entry point is called while already executing   |
 //! | `"Upgrade authority already initialized"` | `initialize_upgrade_authority` called more than once |
 //! | `"Upgrade authority not initialized"` | Upgrade announcement/execution attempted before authority setup |
 //! | `"Unauthorized upgrade authority"` | Upgrade action signed by an address other than the authority |
@@ -72,9 +66,6 @@ pub enum VestFlowError {
 pub enum DataKey {
     Schedule(u64),
     ScheduleCount,
-    /// Re-entrancy guard flag.
-    /// Set to `true` while a state-mutating entry point is executing.
-    Locked,
     /// Address authorized to announce, execute, and cancel contract upgrades.
     UpgradeAuthority,
     /// The currently announced contract upgrade, if any.
@@ -318,22 +309,6 @@ pub struct VestFlowContract;
 
 #[contractimpl]
 impl VestFlowContract {
-    /// Acquire the re-entrancy lock.
-    ///
-    /// Panics with `"Re-entrant call detected"` if the lock is already held.
-    fn acquire_lock(env: &Env) {
-        assert!(
-            !env.storage().instance().has(&DataKey::Locked),
-            "Re-entrant call detected"
-        );
-        env.storage().instance().set(&DataKey::Locked, &true);
-    }
-
-    /// Release the re-entrancy lock.
-    fn release_lock(env: &Env) {
-        env.storage().instance().remove(&DataKey::Locked);
-    }
-
     /// Read the configured upgrade authority.
     ///
     /// Panics with `"Upgrade authority not initialized"` when the authority
@@ -951,8 +926,6 @@ impl VestFlowContract {
     ///
     /// Panics with `"Schedule not found"` if `schedule_id` does not exist.
     pub fn claim(env: Env, schedule_id: u64) -> Result<(), VestFlowError> {
-        Self::acquire_lock(&env);
-
         let mut schedule: VestingSchedule = env
             .storage()
             .instance()
@@ -1019,7 +992,6 @@ impl VestFlowContract {
             (schedule_id, claimable, schedule.claimed_amount),
         );
 
-        Self::release_lock(&env);
         Ok(())
     }
 
@@ -1033,8 +1005,6 @@ impl VestFlowContract {
     /// Panics with `"Schedule is not revocable"` if the schedule is irrevocable.
     /// Panics with `"Already revoked"` if the schedule has already been revoked.
     pub fn revoke(env: Env, schedule_id: u64) -> Result<(), VestFlowError> {
-        Self::acquire_lock(&env);
-
         let mut schedule: VestingSchedule = env
             .storage()
             .instance()
@@ -1078,7 +1048,6 @@ impl VestFlowContract {
             (schedule_id, unvested, vested),
         );
 
-        Self::release_lock(&env);
         Ok(())
     }
 

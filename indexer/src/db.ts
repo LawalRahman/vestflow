@@ -1,40 +1,62 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
-import type { EventQueryParams, IndexedEvent } from "./types";
+import { parseNetwork, type NetworkName } from "./config";
+import type { EventQueryParams, IndexedEvent, TvlStats } from "./types";
 
-const DB_PATH =
-  process.env.INDEXER_DB_PATH ??
-  path.join(process.cwd(), "vestflow-events.db");
+const DB_PATH = process.env.INDEXER_DB_PATH;
 
 const SCHEMA_PATH = path.join(__dirname, "..", "schema.sql");
 
-let _db: Database.Database | null = null;
+const dbs = new Map<NetworkName, Database.Database>();
 
-export function getDb(): Database.Database {
-  if (!_db) {
-    _db = new Database(DB_PATH);
+function dbPathFor(network: NetworkName): string {
+  const specific = process.env[`INDEXER_DB_PATH_${network.toUpperCase()}`];
+  if (specific) return specific;
+  // Preserve the legacy single-network path only for the poller's configured
+  // network. Using it for both query values would mix Mainnet and Testnet rows.
+  if (DB_PATH && network === parseNetwork(process.env.INDEXER_NETWORK)) {
+    return DB_PATH;
+  }
+  return path.join(process.cwd(), `vestflow-events-${network}.db`);
+}
+
+function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!columns.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+export function getDb(network = parseNetwork(undefined)): Database.Database {
+  let db = dbs.get(network);
+  if (!db) {
+    db = new Database(dbPathFor(network));
     // WAL mode: safe concurrent reads from the query server while the
     // poller writes, without blocking either side.
-    _db.pragma("journal_mode = WAL");
-    _db.pragma("synchronous = NORMAL");
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = NORMAL");
     const schema = fs.readFileSync(SCHEMA_PATH, "utf8");
-    _db.exec(schema);
+    db.exec(schema);
+    ensureColumn(db, "schedule_events", "token", "token TEXT");
+    ensureColumn(db, "schedule_events", "created_amount", "created_amount TEXT");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_token ON schedule_events (token)");
+    dbs.set(network, db);
   }
-  return _db;
+  return db;
 }
 
 // ── Checkpoint ────────────────────────────────────────────────────────
 
-export function getCheckpoint(): number {
-  const row = getDb()
+export function getCheckpoint(network?: NetworkName): number {
+  const row = getDb(network)
     .prepare("SELECT last_ledger FROM checkpoint WHERE id = 1")
     .get() as { last_ledger: number } | undefined;
   return row?.last_ledger ?? 0;
 }
 
-export function setCheckpoint(ledger: number): void {
-  getDb()
+export function setCheckpoint(ledger: number, network?: NetworkName): void {
+  getDb(network)
     .prepare("UPDATE checkpoint SET last_ledger = ? WHERE id = 1")
     .run(ledger);
 }
@@ -50,6 +72,8 @@ export interface InsertEventRow {
   grantor: string | null;
   beneficiary: string | null;
   amount: string | null;
+  token: string | null;
+  created_amount: string | null;
   raw_topics: string;
   raw_value: string;
 }
@@ -59,13 +83,13 @@ export interface InsertEventRow {
  * Returns true if a new row was written, false if it already existed
  * (idempotent — duplicate Stellar event IDs are silently ignored).
  */
-export function insertEvent(row: InsertEventRow): boolean {
-  const result = getDb()
+export function insertEvent(row: InsertEventRow, network?: NetworkName): boolean {
+  const result = getDb(network)
     .prepare(
       `INSERT OR IGNORE INTO schedule_events
         (id, event_type, ledger, ledger_closed_at, schedule_id,
-         grantor, beneficiary, amount, raw_topics, raw_value)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         grantor, beneficiary, amount, token, created_amount, raw_topics, raw_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       row.id,
@@ -76,6 +100,8 @@ export function insertEvent(row: InsertEventRow): boolean {
       row.grantor,
       row.beneficiary,
       row.amount,
+      row.token,
+      row.created_amount,
       row.raw_topics,
       row.raw_value
     );
@@ -84,6 +110,7 @@ export function insertEvent(row: InsertEventRow): boolean {
 
 /** Query events with optional filters. Results ordered by ledger DESC. */
 export function queryEvents(params: EventQueryParams): IndexedEvent[] {
+  const db = getDb(params.network);
   const conditions: string[] = [];
   const values: unknown[] = [];
 
@@ -130,24 +157,134 @@ export function queryEvents(params: EventQueryParams): IndexedEvent[] {
                    SELECT schedule_id FROM schedule_events WHERE event_type = 'revoked'
                  )
                  ORDER BY ledger DESC LIMIT ? OFFSET ?`;
-    return getDb().prepare(sql).all(...values, limit, offset) as IndexedEvent[];
+    return db.prepare(sql).all(...values, limit, offset) as IndexedEvent[];
   }
 
-  return getDb()
+  return db
     .prepare(
       `SELECT * FROM schedule_events ${where} ORDER BY ledger DESC LIMIT ? OFFSET ?`
     )
     .all(...values, limit, offset) as IndexedEvent[];
 }
 
-/**
- * Get all unique schedule IDs from events
- */
-export function getAllScheduleIds(): number[] {
-  const rows = getDb()
-    .prepare("SELECT DISTINCT schedule_id FROM schedule_events WHERE schedule_id IS NOT NULL ORDER BY schedule_id")
-    .all() as { schedule_id: number }[];
-  return rows.map(r => r.schedule_id);
+// ── TVL aggregation ─────────────────────────────────────────────────────
+
+function bigintSum(rows: { value: string | null }[]): bigint {
+  return rows.reduce((sum, row) => sum + BigInt(row.value ?? "0"), 0n);
+}
+
+export function computeTvlStats(network = parseNetwork(undefined)): TvlStats {
+  const db = getDb(network);
+  const assets = db
+    .prepare(
+      `SELECT DISTINCT token AS asset
+       FROM schedule_events
+       WHERE event_type = 'schedule_created'
+         AND token IS NOT NULL
+         AND token != ''
+       ORDER BY token ASC`
+    )
+    .all() as { asset: string }[];
+
+  const lastUpdated = Math.floor(Date.now() / 1000);
+  const stats = assets.map(({ asset }) => {
+    const createdRows = db
+      .prepare(
+        `SELECT created_amount AS value
+         FROM schedule_events
+         WHERE event_type = 'schedule_created' AND token = ?`
+      )
+      .all(asset) as { value: string | null }[];
+    const claimedRows = db
+      .prepare(
+        `SELECT amount AS value
+         FROM schedule_events
+         WHERE event_type = 'claimed' AND token = ?`
+      )
+      .all(asset) as { value: string | null }[];
+    const revokedRows = db
+      .prepare(
+        `SELECT json_extract(raw_value, '$[1]') AS value
+         FROM schedule_events
+         WHERE event_type = 'revoked' AND token = ?`
+      )
+      .all(asset) as { value: string | null }[];
+    const active = db
+      .prepare(
+        `SELECT COUNT(DISTINCT created.schedule_id) AS count
+         FROM schedule_events created
+         WHERE created.event_type = 'schedule_created'
+           AND created.token = ?
+           AND created.schedule_id NOT IN (
+             SELECT schedule_id FROM schedule_events WHERE event_type = 'revoked'
+           )`
+      )
+      .get(asset) as { count: number } | undefined;
+
+    const totalCreated = bigintSum(createdRows);
+    const totalClaimed = bigintSum(claimedRows);
+    const totalRevokedUnvested = bigintSum(revokedRows);
+    const tvl = totalCreated - totalClaimed - totalRevokedUnvested;
+
+    const stat = {
+      asset,
+      total_created: totalCreated.toString(),
+      total_claimed: totalClaimed.toString(),
+      total_revoked_unvested: totalRevokedUnvested.toString(),
+      total_value_locked: (tvl > 0n ? tvl : 0n).toString(),
+      active_schedules: active?.count ?? 0,
+    };
+    db.prepare(
+      `INSERT OR REPLACE INTO tvl_stats
+       (asset, total_created, total_claimed, total_revoked_unvested,
+        total_value_locked, active_schedules, last_updated)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      stat.asset,
+      stat.total_created,
+      stat.total_claimed,
+      stat.total_revoked_unvested,
+      stat.total_value_locked,
+      stat.active_schedules,
+      lastUpdated
+    );
+    return stat;
+  });
+
+  const total = stats.reduce(
+    (sum, asset) => sum + BigInt(asset.total_value_locked),
+    0n
+  );
+
+  return {
+    network,
+    assets: stats,
+    total_value_locked: total.toString(),
+    last_updated: lastUpdated,
+  };
+}
+
+export function getTvlStats(network = parseNetwork(undefined)): TvlStats {
+  const db = getDb(network);
+  const rows = db
+    .prepare("SELECT * FROM tvl_stats ORDER BY asset ASC")
+    .all() as (TvlStats["assets"][number] & { last_updated: number })[];
+
+  if (rows.length === 0) {
+    return computeTvlStats(network);
+  }
+
+  const total = rows.reduce(
+    (sum, row) => sum + BigInt(row.total_value_locked),
+    0n
+  );
+
+  return {
+    network,
+    assets: rows.map(({ last_updated: _lastUpdated, ...row }) => row),
+    total_value_locked: total.toString(),
+    last_updated: Math.max(...rows.map((row) => row.last_updated)),
+  };
 }
 
 // ── Analytics ──────────────────────────────────────────────────────────

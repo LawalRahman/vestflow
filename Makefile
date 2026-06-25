@@ -1,6 +1,6 @@
 # =============================================================================
 #  VestFlow — Hardhat-style task runner
-#  Targets: deploy, create-schedule, claim, revoke
+#  Targets: build, optimize, deploy, upgrade, create-schedule, claim, revoke
 #
 #  Environment variables (with defaults):
 #    NETWORK      = testnet | mainnet   (default: testnet)
@@ -25,13 +25,20 @@ else
 endif
 
 WASM_PATH     := contracts/target/wasm32v1-none/release/vestflow.wasm
+OPT_WASM_PATH := contracts/target/wasm32v1-none/release/vestflow.optimized.wasm
 
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
 	@echo "Usage:  make <target> [NETWORK=mainnet] [CONTRACT_ID=...]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  deploy            Build WASM and deploy the VestFlow contract"
+	@echo "  build             Build release WASM"
+	@echo "  optimize          Build and optimize release WASM"
+	@echo "  cost              Profile a read-only entry point with stellar contract invoke --cost"
+	@echo "  deploy            Build, optimize, and deploy the VestFlow contract"
+	@echo "  upload-wasm       Upload optimized WASM and print the WASM hash"
+	@echo "  announce-upgrade  Announce a WASM hash for the configured contract"
+	@echo "  execute-upgrade   Execute the announced upgrade after the timelock"
 	@echo "  create-schedule   Create a new vesting schedule"
 	@echo "  claim             Claim vested tokens for a schedule"
 	@echo "  revoke            Revoke a vesting schedule"
@@ -52,15 +59,66 @@ help:
 build:
 	cargo build --target wasm32v1-none --release --manifest-path contracts/Cargo.toml
 
+.PHONY: optimize
+optimize: build
+	stellar contract optimize \
+		--wasm $(WASM_PATH) \
+		--wasm-out $(OPT_WASM_PATH)
+
+.PHONY: cost
+cost:
+	stellar contract invoke --cost \
+		--id $(CONTRACT_ID) \
+		--source $(SOURCE) \
+		--network $(NETWORK) \
+		--rpc-url $(RPC_URL) \
+		--network-passphrase $(NETWORK_PASSPHRASE) \
+		-- \
+		$(METHOD) $(ARGS)
+
 # ── Deploy ───────────────────────────────────────────────────────────────────
 .PHONY: deploy
-deploy: build
+deploy: optimize
 	stellar contract deploy \
-		--wasm $(WASM_PATH) \
+		--wasm $(OPT_WASM_PATH) \
 		--source $(SOURCE) \
 		--network $(NETWORK) \
 		--rpc-url $(RPC_URL) \
 		--network-passphrase $(NETWORK_PASSPHRASE)
+
+.PHONY: upload-wasm
+upload-wasm: optimize
+	stellar contract upload \
+		--wasm $(OPT_WASM_PATH) \
+		--source $(SOURCE) \
+		--network $(NETWORK) \
+		--rpc-url $(RPC_URL) \
+		--network-passphrase $(NETWORK_PASSPHRASE)
+
+.PHONY: announce-upgrade
+announce-upgrade:
+	stellar contract invoke \
+		--id $(CONTRACT_ID) \
+		--source $(SOURCE) \
+		--network $(NETWORK) \
+		--rpc-url $(RPC_URL) \
+		--network-passphrase $(NETWORK_PASSPHRASE) \
+		-- \
+		announce_upgrade \
+		--authority $(SOURCE) \
+		--wasm-hash $(WASM_HASH)
+
+.PHONY: execute-upgrade
+execute-upgrade:
+	stellar contract invoke \
+		--id $(CONTRACT_ID) \
+		--source $(SOURCE) \
+		--network $(NETWORK) \
+		--rpc-url $(RPC_URL) \
+		--network-passphrase $(NETWORK_PASSPHRASE) \
+		-- \
+		execute_upgrade \
+		--authority $(SOURCE)
 
 # ── Create Schedule ──────────────────────────────────────────────────────────
 .PHONY: create-schedule

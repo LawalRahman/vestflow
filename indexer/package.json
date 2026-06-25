@@ -5,17 +5,17 @@
   "description": "Off-chain event indexer for VestFlow Soroban contract events",
   "main": "dist/poller.js",
   "scripts": {
-    "dev": "ts-node --esm src/poller.ts",
-    "dev:server": "ts-node --esm src/server.ts",
+    "dev": "ts-node src/poller.ts",
+    "dev:server": "ts-node src/server.ts",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:server\"",
-    "test:pagination": "ts-node --esm test/pagination_test.ts",
+    "test:pagination": "ts-node test/pagination_test.ts",
     "build": "tsc",
     "start": "node dist/poller.js",
     "start:server": "node dist/server.js"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^15.1.0",
-    "better-sqlite3": "^9.6.0"
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

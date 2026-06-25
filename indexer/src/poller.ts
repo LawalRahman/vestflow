@@ -15,19 +15,23 @@
  */
 
 import { rpc as StellarRpc, xdr, scValToNative } from "@stellar/stellar-sdk";
-import { getCheckpoint, setCheckpoint, insertEvent } from "./db";
-import { processNotifications } from "./notifications";
+import { getCheckpoint, setCheckpoint, insertEvent, computeTvlStats } from "./db";
+import { getNetworkConfig, parseNetwork } from "./config";
 import type { EventType } from "./types";
 
-const RPC_URL =
-  process.env.RPC_URL ?? "https://soroban-testnet.stellar.org";
-const CONTRACT_ID =
-  process.env.CONTRACT_ID ??
-  "CCZ6AE75C27DMB3SOIHK7WZSBUG3NQPVLHSVEBQ2FSAEVGRJ5TXAZWCX";
+const NETWORK = parseNetwork(process.env.INDEXER_NETWORK);
+const CONFIG = getNetworkConfig(NETWORK);
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? "10000");
+const TVL_COMPUTE_INTERVAL_MS = Number(
+  process.env.TVL_COMPUTE_INTERVAL_MS ?? "60000"
+);
 const START_LEDGER = Number(process.env.START_LEDGER ?? "0");
 
-const server = new StellarRpc.Server(RPC_URL);
+if (!CONFIG.contractId) {
+  throw new Error(`Missing CONTRACT_ID_${NETWORK.toUpperCase()} for ${NETWORK}`);
+}
+
+const server = new StellarRpc.Server(CONFIG.rpcUrl);
 
 // ── Parsing helpers ───────────────────────────────────────────────────
 
@@ -54,6 +58,13 @@ function toStr(v: unknown): string | null {
   try { return String(v); } catch { return null; }
 }
 
+/** JSON.stringify does not support bigint values returned by scValToNative. */
+function jsonStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, item) =>
+    typeof item === "bigint" ? item.toString() : item
+  );
+}
+
 /**
  * Decode the event value, which may be an array (from Vec ScVal tuple) or
  * an object with numeric keys. Returns an array for consistent access.
@@ -74,7 +85,7 @@ function asArray(v: unknown): unknown[] {
 // ── Core poll ─────────────────────────────────────────────────────────
 
 async function poll(): Promise<void> {
-  const lastLedger = getCheckpoint();
+  const lastLedger = getCheckpoint(NETWORK);
 
   // On first run START_LEDGER controls the historical replay depth.
   // Subsequent runs resume from the saved checkpoint.
@@ -91,7 +102,7 @@ async function poll(): Promise<void> {
       // The SDK typing for getEvents is loose in v15; cast as needed.
       const response: any = await (server as any).getEvents({
         startLedger: cursor ? undefined : startLedger,
-        filters: [{ type: "contract", contractIds: [CONTRACT_ID] }],
+        filters: [{ type: "contract", contractIds: [CONFIG.contractId] }],
         ...(cursor ? { cursor } : {}),
         limit: 200,
       });
@@ -108,19 +119,36 @@ async function poll(): Promise<void> {
         let grantor: string | null = null;
         let beneficiary: string | null = null;
         let amount: string | null = null;
+        let token: string | null = null;
+        let createdAmount: string | null = null;
 
         switch (eventType) {
           case "schedule_created":
-            // topics: ["created", grantor, beneficiary, token]
-            // value: [id, total_amount]
-            grantor = toStr(topics[1]);
-            beneficiary = toStr(topics[2]);
-            scheduleId = valueArr[0] != null ? Number(valueArr[0]) : null;
+            // Current contract: topics ["created", id],
+            // value [grantor, beneficiary, token, total_amount, ...].
+            // Older deployments used topics ["created", grantor, beneficiary, token],
+            // value [id, total_amount]; keep both decoders for replay safety.
+            scheduleId = topics[1] != null && !Number.isNaN(Number(topics[1]))
+              ? Number(topics[1])
+              : valueArr[0] != null ? Number(valueArr[0]) : null;
+            grantor = valueArr[0] != null && scheduleId === Number(topics[1])
+              ? toStr(valueArr[0])
+              : toStr(topics[1]);
+            beneficiary = valueArr[1] != null && scheduleId === Number(topics[1])
+              ? toStr(valueArr[1])
+              : toStr(topics[2]);
+            token = valueArr[2] != null && scheduleId === Number(topics[1])
+              ? toStr(valueArr[2])
+              : toStr(topics[3]);
+            createdAmount = valueArr[3] != null && scheduleId === Number(topics[1])
+              ? String(valueArr[3])
+              : valueArr[1] != null ? String(valueArr[1]) : null;
             break;
           case "claimed":
             // topics: ["claimed", beneficiary, token]
             // value: [schedule_id, claimable, total_claimed]
             beneficiary = toStr(topics[1]);
+            token = toStr(topics[2]);
             scheduleId = valueArr[0] != null ? Number(valueArr[0]) : null;
             amount = valueArr[1] != null ? String(valueArr[1]) : null;
             break;
@@ -128,6 +156,7 @@ async function poll(): Promise<void> {
             // topics: ["revoked", grantor, token]
             // value: [schedule_id, unvested, vested]
             grantor = toStr(topics[1]);
+            token = toStr(topics[2]);
             scheduleId = valueArr[0] != null ? Number(valueArr[0]) : null;
             break;
         }
@@ -141,9 +170,11 @@ async function poll(): Promise<void> {
           grantor,
           beneficiary,
           amount,
-          raw_topics: JSON.stringify(topics),
-          raw_value: JSON.stringify(value),
-        });
+          token,
+          created_amount: createdAmount,
+          raw_topics: jsonStringify(topics),
+          raw_value: jsonStringify(value),
+        }, NETWORK);
 
         if (isNew) ingested++;
         if (raw.ledger > highestLedger) highestLedger = raw.ledger;
@@ -152,7 +183,7 @@ async function poll(): Promise<void> {
       // Checkpoint after each successful page so a mid-batch crash
       // wastes at most one page worth of RPC calls on restart.
       if (highestLedger > lastLedger) {
-        setCheckpoint(highestLedger);
+        setCheckpoint(highestLedger, NETWORK);
       }
 
       // Follow cursor if we received a full page (more events may exist).
@@ -182,15 +213,26 @@ async function poll(): Promise<void> {
 
 async function run(): Promise<void> {
   console.log("[poller] VestFlow event indexer starting");
-  console.log(`[poller]   Contract : ${CONTRACT_ID}`);
-  console.log(`[poller]   RPC      : ${RPC_URL}`);
+  console.log(`[poller]   Network  : ${NETWORK}`);
+  console.log(`[poller]   Contract : ${CONFIG.contractId}`);
+  console.log(`[poller]   RPC      : ${CONFIG.rpcUrl}`);
   console.log(`[poller]   Interval : ${POLL_INTERVAL_MS} ms`);
-  console.log(`[poller]   Checkpoint: ledger ${getCheckpoint()}`);
+  console.log(`[poller]   TVL job  : every ${TVL_COMPUTE_INTERVAL_MS} ms`);
+  console.log(`[poller]   Checkpoint: ledger ${getCheckpoint(NETWORK)}`);
+
+  let lastTvlCompute = 0;
 
   // Poll immediately on start, then on each interval.
   while (true) {
     await poll();
-    await processNotifications();
+    const now = Date.now();
+    if (now - lastTvlCompute >= TVL_COMPUTE_INTERVAL_MS) {
+      const tvl = computeTvlStats(NETWORK);
+      lastTvlCompute = now;
+      console.log(
+        `[poller] TVL refreshed for ${tvl.assets.length} asset(s): ${tvl.total_value_locked}`
+      );
+    }
     await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }

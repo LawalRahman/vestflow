@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS schedule_events (
   grantor     TEXT,       -- parsed from topic[2] for schedule_created / revoked
   beneficiary TEXT,       -- parsed from topic[2] for claimed; topic[3] for created
   amount      TEXT,       -- bigint as decimal string (claimed events only)
+  token       TEXT,       -- parsed Stellar asset contract address when available
+  created_amount TEXT,    -- bigint as decimal string (schedule_created events only)
 
   raw_topics TEXT NOT NULL, -- JSON array of native-decoded topic values
   raw_value  TEXT NOT NULL, -- JSON of native-decoded event value
@@ -26,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_beneficiary  ON schedule_events (beneficiary);
 CREATE INDEX IF NOT EXISTS idx_schedule_id  ON schedule_events (schedule_id);
 CREATE INDEX IF NOT EXISTS idx_event_type   ON schedule_events (event_type);
 CREATE INDEX IF NOT EXISTS idx_ledger       ON schedule_events (ledger);
+CREATE INDEX IF NOT EXISTS idx_token        ON schedule_events (token);
 
 -- Singleton checkpoint row — stores the highest fully-processed ledger.
 CREATE TABLE IF NOT EXISTS checkpoint (
@@ -62,6 +65,17 @@ CREATE TABLE IF NOT EXISTS daily_stats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats (date);
+
+-- TVL cache per asset, refreshed by the poller and readable by /stats/tvl.
+CREATE TABLE IF NOT EXISTS tvl_stats (
+  asset                  TEXT PRIMARY KEY,
+  total_created          TEXT NOT NULL,
+  total_claimed          TEXT NOT NULL,
+  total_revoked_unvested TEXT NOT NULL,
+  total_value_locked     TEXT NOT NULL,
+  active_schedules       INTEGER NOT NULL,
+  last_updated           INTEGER NOT NULL DEFAULT (unixepoch())
+);
 
 -- Notification subscriptions
 CREATE TABLE IF NOT EXISTS notification_subscriptions (

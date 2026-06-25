@@ -23,7 +23,8 @@ set -euo pipefail
 NETWORK="testnet"
 NETWORK_PASSPHRASE="Test SDF Network ; September 2015"
 RPC_URL="https://soroban-testnet.stellar.org"
-WASM_PATH="target/wasm32v1-none/release/vestflow.wasm"
+WASM_PATH="contracts/target/wasm32v1-none/release/vestflow.wasm"
+OPT_WASM_PATH="contracts/target/wasm32v1-none/release/vestflow.optimized.wasm"
 DEPLOYER_KEY="${DEPLOYER_KEY:-deployer}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${VERSION:-$(git -C "${REPO_ROOT}" describe --tags --always --dirty 2>/dev/null || echo untagged)}"
@@ -39,15 +40,21 @@ echo "▶ Building WASM..."
   cargo build --target wasm32v1-none --release 2>&1
 )
 
+echo ""
+echo "▶ Optimizing WASM..."
+stellar contract optimize \
+  --wasm "${REPO_ROOT}/${WASM_PATH}" \
+  --wasm-out "${REPO_ROOT}/${OPT_WASM_PATH}"
+
 if command -v sha256sum >/dev/null 2>&1; then
-  WASM_HASH="$(sha256sum "${REPO_ROOT}/${WASM_PATH}" | awk '{print $1}')"
+  WASM_HASH="$(sha256sum "${REPO_ROOT}/${OPT_WASM_PATH}" | awk '{print $1}')"
 fi
 
 # ── Deploy ────────────────────────────────────────────────────────────────────
 echo ""
 echo "▶ Deploying to ${NETWORK}..."
 CONTRACT_ID=$(stellar contract deploy \
-  --wasm "${REPO_ROOT}/${WASM_PATH}" \
+  --wasm "${REPO_ROOT}/${OPT_WASM_PATH}" \
   --source "${DEPLOYER_KEY}" \
   --network "${NETWORK}" \
   --rpc-url "${RPC_URL}" \

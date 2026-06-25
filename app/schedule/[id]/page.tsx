@@ -1,8 +1,9 @@
 "use client";
 import Navbar from "@/components/Navbar";
+import CopyButton from "@/components/CopyButton";
 import VestingChart from "@/components/VestingChart";
 import NotificationSubscription from "@/components/NotificationSubscription";
-import { formatDate, NETWORK } from "@/lib/stellar";
+import { formatCliffDate, formatDate, NETWORK } from "@/lib/stellar";
 import { useXlmPrice, formatUsd } from "@/lib/price";
 import Link from "next/link";
 import { useParams } from "next/navigation";

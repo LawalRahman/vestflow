@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
  *   to_ledger=234567
  *   limit=50            max 200
  *   offset=0
+ *   network=testnet|mainnet
  *
  * In local development: start the indexer first (cd indexer && npm run dev:all).
  * In production: set INDEXER_URL to point at the deployed indexer service.
@@ -20,6 +21,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 const INDEXER_URL =
   process.env.INDEXER_URL ?? "http://localhost:3001";
+
+function indexerUrlFor(network: string | null): string {
+  if (network === "mainnet") {
+    return process.env.INDEXER_MAINNET_URL ?? INDEXER_URL;
+  }
+  return process.env.INDEXER_TESTNET_URL ?? INDEXER_URL;
+}
 
 const ALLOWED_PARAMS = new Set([
   "address",
@@ -31,11 +39,19 @@ const ALLOWED_PARAMS = new Set([
   "to_ledger",
   "limit",
   "offset",
+  "network",
 ]);
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
-    const upstream = new URL(`${INDEXER_URL}/events`);
+    const network = req.nextUrl.searchParams.get("network");
+    if (network != null && network !== "mainnet" && network !== "testnet") {
+      return NextResponse.json(
+        { error: "network must be either mainnet or testnet" },
+        { status: 400 }
+      );
+    }
+    const upstream = new URL(`${indexerUrlFor(network)}/events`);
 
     // Forward only known, safe params — avoids passing arbitrary values
     // to the indexer query layer.

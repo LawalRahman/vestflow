@@ -187,7 +187,6 @@ export async function createSchedule(
   beneficiary: string,
   totalAmountXlm: string,
   tokenAddress: string,
-  totalAmountXlm: number,
   startTime: number,
   durationDays: number,
   cliffDays: number,
@@ -197,6 +196,7 @@ export async function createSchedule(
   const totalStroops = xlmToStroops(totalAmountXlm);
   const durationSecs = durationDays * 86400;
   const cliffSecs = cliffDays * 86400;
+  const lockupSecs = cliffSecs;
 
   const kindVal = xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(kind)]);
 
@@ -208,6 +208,7 @@ export async function createSchedule(
     nativeToScVal(startTime, { type: "u64" }),
     nativeToScVal(durationSecs, { type: "u64" }),
     nativeToScVal(cliffSecs, { type: "u64" }),
+    nativeToScVal(lockupSecs, { type: "u64" }),
     kindVal,
     nativeToScVal(revocable, { type: "bool" }),
   ];

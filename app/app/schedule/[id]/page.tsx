@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
+import { useToast } from "@/components/Toast";
 import VestingChart from "@/components/VestingChart";
 import {
   getSchedule,
