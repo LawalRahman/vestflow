@@ -180,6 +180,9 @@ export class VestflowClient {
           : "Linear",
       revocable: Boolean(raw.revocable),
       revoked: Boolean(raw.revoked),
+      paused: Boolean(raw.paused),
+      paused_duration: Number(raw.paused_duration ?? 0),
+      paused_at: Number(raw.paused_at ?? 0),
     };
   }
 
@@ -362,6 +365,50 @@ export class VestflowClient {
     return this.buildAndSend(
       publicKey,
       "revoke",
+      [nativeToScVal(scheduleId, { type: "u64" })],
+      signer
+    );
+  }
+
+  /**
+   * Pause an active vesting schedule (grantor only).
+   * While paused, no additional tokens vest. The beneficiary can still claim
+   * already-vested tokens.
+   *
+   * @param publicKey - Grantor's Stellar public key
+   * @param scheduleId - ID of the schedule to pause
+   * @param signer - Function that signs the transaction XDR
+   * @returns Transaction hash
+   */
+  async pauseSchedule(
+    publicKey: string,
+    scheduleId: number,
+    signer: (xdr: string, opts: { networkPassphrase: string }) => Promise<string | { signedTxXdr: string }>
+  ): Promise<string> {
+    return this.buildAndSend(
+      publicKey,
+      "pause_schedule",
+      [nativeToScVal(scheduleId, { type: "u64" })],
+      signer
+    );
+  }
+
+  /**
+   * Resume a paused vesting schedule (grantor only).
+   *
+   * @param publicKey - Grantor's Stellar public key
+   * @param scheduleId - ID of the schedule to resume
+   * @param signer - Function that signs the transaction XDR
+   * @returns Transaction hash
+   */
+  async resumeSchedule(
+    publicKey: string,
+    scheduleId: number,
+    signer: (xdr: string, opts: { networkPassphrase: string }) => Promise<string | { signedTxXdr: string }>
+  ): Promise<string> {
+    return this.buildAndSend(
+      publicKey,
+      "resume_schedule",
       [nativeToScVal(scheduleId, { type: "u64" })],
       signer
     );
