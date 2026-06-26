@@ -15,6 +15,7 @@ import CopyButton from "@/components/CopyButton";
 import ClaimModal from "@/components/ClaimModal";
 import RevokeModal from "@/components/RevokeModal";
 import VestingChart from "@/components/VestingChart";
+import AddressLabel from "@/components/AddressLabel";
 import { useXlmPrice, formatUsd } from "@/lib/price";
 
 export default function ScheduleCard({
@@ -87,8 +88,24 @@ export default function ScheduleCard({
 
       {/* Details grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-zinc-400">
-        <div><span className="text-zinc-600">Grantor</span><p className="font-mono text-zinc-300 mt-0.5"><span className="sm:hidden">{truncate(schedule.grantor, 4, 3)}</span><span className="hidden sm:inline">{truncate(schedule.grantor)}</span></p></div>
-        <div><span className="text-zinc-600">Beneficiary</span><p className="font-mono text-zinc-300 mt-0.5"><span className="sm:hidden">{truncate(schedule.beneficiary, 4, 3)}</span><span className="hidden sm:inline">{truncate(schedule.beneficiary)}</span></p></div>
+        <div>
+          <span className="text-zinc-600">Grantor</span>
+          <AddressLabel
+            address={schedule.grantor}
+            compact
+            className="mt-0.5"
+            secondaryClassName="text-[11px] font-mono text-zinc-500 break-all"
+          />
+        </div>
+        <div>
+          <span className="text-zinc-600">Beneficiary</span>
+          <AddressLabel
+            address={schedule.beneficiary}
+            compact
+            className="mt-0.5"
+            secondaryClassName="text-[11px] font-mono text-zinc-500 break-all"
+          />
+        </div>
         <div>
           <span className="text-zinc-600">Total</span>
           <p className="text-zinc-300 mt-0.5">{stroopsToXlm(schedule.total_amount)} XLM</p>

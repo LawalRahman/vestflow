@@ -6,6 +6,7 @@ import Navbar from "@/components/Navbar";
 import { useToast } from "@/components/Toast";
 import VestingChart from "@/components/VestingChart";
 import ClaimModal from "@/components/ClaimModal";
+import AddressLabel from "@/components/AddressLabel";
 import {
   getSchedule,
   ScheduleData,
@@ -181,14 +182,36 @@ export default function ScheduleDetailPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <div>
               <p className="text-zinc-500 text-xs uppercase tracking-wider mb-1">Grantor</p>
-              <a href={`https://stellar.expert/explorer/${NETWORK}/account/${schedule.grantor}`} target="_blank" rel="noopener noreferrer" className="font-mono text-zinc-300 hover:text-violet-300 break-all transition-colors">
-                {schedule.grantor}
+              <AddressLabel
+                address={schedule.grantor}
+                fullAddress
+                editable
+                secondaryClassName="text-xs font-mono text-zinc-500 break-all"
+              />
+              <a
+                href={`https://stellar.expert/explorer/${NETWORK}/account/${schedule.grantor}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs text-violet-300 hover:text-violet-200 transition-colors"
+              >
+                View on Stellar Expert →
               </a>
             </div>
             <div>
               <p className="text-zinc-500 text-xs uppercase tracking-wider mb-1">Beneficiary</p>
-              <a href={`https://stellar.expert/explorer/${NETWORK}/account/${schedule.beneficiary}`} target="_blank" rel="noopener noreferrer" className="font-mono text-zinc-300 hover:text-violet-300 break-all transition-colors">
-                {schedule.beneficiary}
+              <AddressLabel
+                address={schedule.beneficiary}
+                fullAddress
+                editable
+                secondaryClassName="text-xs font-mono text-zinc-500 break-all"
+              />
+              <a
+                href={`https://stellar.expert/explorer/${NETWORK}/account/${schedule.beneficiary}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs text-violet-300 hover:text-violet-200 transition-colors"
+              >
+                View on Stellar Expert →
               </a>
             </div>
             <div>

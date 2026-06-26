@@ -510,6 +510,10 @@ impl VestFlowContract {
             return Err(VestFlowError::CliffExceedsDuration);
         }
         assert!(lockup_duration >= cliff_duration, "Lockup cannot be less than cliff");
+        assert!(
+            start_time >= env.ledger().timestamp(),
+            "Start time cannot be in the past"
+        );
 
         let count: u64 = env
             .storage()
@@ -657,7 +661,7 @@ impl VestFlowContract {
             paused_duration: 0,
             paused_at: 0,
             requires_milestones: false,
-            milestones,
+            milestones: milestones.clone(),
         };
 
         env.storage()
@@ -1414,6 +1418,28 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Start time cannot be in the past")]
+    fn test_create_schedule_rejects_past_start_time() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, grantor, beneficiary, token_addr, _) = setup(&env);
+
+        set_time(&env, 1000);
+        client.create_schedule(
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &999,
+            &1000,
+            &0,
+            &0,
+            &VestingKind::Linear,
+            &false,
+        );
+    }
+
+    #[test]
     fn test_revoke_returns_unvested() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1479,6 +1505,39 @@ mod test {
         // Beneficiary can still claim the full amount
         client.claim(&id);
         assert_eq!(token.balance(&beneficiary), 1000);
+    }
+
+    #[test]
+    fn test_revoked_schedule_claims_keep_vested_balance_claimable() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, grantor, beneficiary, token_addr, _) = setup(&env);
+        let token = TokenClient::new(&env, &token_addr);
+
+        set_time(&env, 0);
+        let id = client.create_schedule(
+            &grantor,
+            &beneficiary,
+            &token_addr,
+            &1000,
+            &0,
+            &1000,
+            &0,
+            &0,
+            &VestingKind::Linear,
+            &true,
+        );
+
+        set_time(&env, 250);
+        assert_eq!(client.claimable(&id), 250);
+
+        client.revoke(&id);
+        assert!(client.get_schedule(&id).revoked);
+        assert_eq!(client.claimable(&id), 250);
+
+        client.claim(&id);
+        assert_eq!(token.balance(&beneficiary), 250);
+        assert_eq!(client.claimable(&id), 0);
     }
 
     #[test]
@@ -1677,10 +1736,10 @@ mod test {
             beneficiary: Address::generate(&env),
             token: Address::generate(&env),
             total_amount: 1_000_000,
-            claimed: 0,
+            claimed_amount: 0,
             start_time: 0,
-            duration: 1_000,
-            cliff_duration: 0,
+            duration_seconds: 1_000,
+            cliff_seconds: 0,
             lockup_duration: 0,
             kind: VestingKind::Linear,
             revocable: false,
@@ -1707,10 +1766,10 @@ mod test {
             beneficiary: Address::generate(&env),
             token: Address::generate(&env),
             total_amount: big_amount,
-            claimed: 0,
+            claimed_amount: 0,
             start_time: 0,
-            duration: u64::MAX,
-            cliff_duration: 0,
+            duration_seconds: u64::MAX,
+            cliff_seconds: 0,
             lockup_duration: 0,
             kind: VestingKind::Linear,
             revocable: false,
@@ -1740,10 +1799,10 @@ mod test {
             beneficiary: Address::generate(&env),
             token: Address::generate(&env),
             total_amount: big_amount,
-            claimed: 0,
+            claimed_amount: 0,
             start_time: 0,
-            duration,
-            cliff_duration: cliff,
+            duration_seconds: duration,
+            cliff_seconds: cliff,
             lockup_duration: cliff,
             kind: VestingKind::LinearWithCliff,
             revocable: false,
@@ -1770,10 +1829,10 @@ mod test {
             beneficiary: Address::generate(&env),
             token: Address::generate(&env),
             total_amount: 500,
-            claimed: 500,
+            claimed_amount: 500,
             start_time: 0,
-            duration: 1_000,
-            cliff_duration: 0,
+            duration_seconds: 1_000,
+            cliff_seconds: 0,
             lockup_duration: 0,
             kind: VestingKind::Linear,
             revocable: false,
@@ -1799,10 +1858,10 @@ mod test {
             beneficiary: Address::generate(&env),
             token: Address::generate(&env),
             total_amount: 1_000,
-            claimed: 0,
+            claimed_amount: 0,
             start_time: 0,
-            duration: 1,
-            cliff_duration: 0,
+            duration_seconds: 1,
+            cliff_seconds: 0,
             lockup_duration: 0,
             kind: VestingKind::Linear,
             revocable: false,
@@ -1836,6 +1895,7 @@ mod test {
             &1000,
             &0,
             &1000,
+            &0,
             &0,
             &VestingKind::Linear,
             &false,
@@ -2117,6 +2177,7 @@ mod test {
             &1000,
             &1000,
             &0,
+            &0,
             &VestingKind::Linear,
             &true,
         );
@@ -2158,10 +2219,11 @@ mod test {
                 beneficiary: Address::generate(&env),
                 token: Address::generate(&env),
                 total_amount,
-                claimed: 0,
+                claimed_amount: 0,
                 start_time,
-                duration,
-                cliff_duration,
+                duration_seconds: duration,
+                cliff_seconds: cliff_duration,
+                lockup_duration: cliff_duration,
                 kind: VestingKind::LinearWithCliff,
                 revocable: false,
                 revoked: false,
@@ -2197,10 +2259,11 @@ mod test {
                 beneficiary: Address::generate(&env),
                 token: Address::generate(&env),
                 total_amount,
-                claimed: 0,
+                claimed_amount: 0,
                 start_time,
-                duration,
-                cliff_duration: 0,
+                duration_seconds: duration,
+                cliff_seconds: 0,
+                lockup_duration: 0,
                 kind: VestingKind::Linear,
                 revocable: false,
                 revoked: false,
@@ -2236,10 +2299,11 @@ mod test {
                 beneficiary: Address::generate(&env),
                 token: Address::generate(&env),
                 total_amount,
-                claimed,
+                claimed_amount: claimed,
                 start_time,
-                duration,
-                cliff_duration: 0,
+                duration_seconds: duration,
+                cliff_seconds: 0,
+                lockup_duration: 0,
                 kind: VestingKind::Linear,
                 revocable: false,
                 revoked: false,
@@ -2256,8 +2320,6 @@ mod test {
             prop_assert!(claimable <= total_amount);
         }
     }
-}
-
     #[test]
     fn test_lockup_prevents_early_claim() {
         let env = Env::default();
@@ -2310,9 +2372,9 @@ mod test {
         assert_eq!(client.claimable(&id), 0);
 
         set_time(&env, 400);
-        assert_eq!(client.claimable(&id), 200);
+        assert_eq!(client.claimable(&id), 250);
         client.claim(&id);
-        assert_eq!(token.balance(&beneficiary), 200);
+        assert_eq!(token.balance(&beneficiary), 250);
     }
 
     #[test]

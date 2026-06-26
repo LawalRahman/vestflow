@@ -20,6 +20,7 @@ import type {
   ScheduleData,
   VestflowConfig,
   CreateScheduleParams,
+  CreateGradedScheduleParams,
   VestingKind,
 } from "./types";
 
@@ -168,10 +169,10 @@ export class VestflowClient {
       beneficiary: raw.beneficiary?.toString() ?? "",
       token: raw.token?.toString() ?? "",
       total_amount: BigInt(raw.total_amount ?? 0),
-      claimed: BigInt(raw.claimed ?? 0),
+      claimed: BigInt(raw.claimed ?? raw.claimed_amount ?? 0),
       start_time: Number(raw.start_time ?? 0),
-      duration: Number(raw.duration ?? 0),
-      cliff_duration: Number(raw.cliff_duration ?? 0),
+      duration: Number(raw.duration ?? raw.duration_seconds ?? 0),
+      cliff_duration: Number(raw.cliff_duration ?? raw.cliff_seconds ?? 0),
       kind:
         raw.kind === "Cliff"
           ? "Cliff"
@@ -280,6 +281,28 @@ export class VestflowClient {
   }
 
   /**
+   * Fetch total vested amounts (earned, including already-claimed) for multiple
+   * schedule IDs in a single simulation round-trip using the vested_amount_bulk
+   * contract view.
+   *
+   * Results are in the same order as the input ids.
+   * Unknown IDs return 0n.
+   */
+  async getVestedAmountBulk(ids: number[], publicKey?: string): Promise<bigint[]> {
+    if (ids.length === 0) return [];
+    try {
+      const idsVal = xdr.ScVal.scvVec(
+        ids.map((id) => nativeToScVal(id, { type: "u64" }))
+      );
+      const val = await this.simulate("vested_amount_bulk", [idsVal], publicKey);
+      const native = scValToNative(val) as bigint[];
+      return native.map((v) => BigInt(v));
+    } catch {
+      return ids.map(() => 0n);
+    }
+  }
+
+  /**
    * Fetch all schedules ever created, with their claimable amounts.
    */
   async getAllSchedules(publicKey?: string): Promise<ScheduleData[]> {
@@ -322,6 +345,52 @@ export class VestflowClient {
       nativeToScVal(params.revocable, { type: "bool" }),
     ];
     return this.buildAndSend(params.grantor, "create_schedule", args, signer);
+  }
+
+  /**
+   * Create a new graded (percentage-based) vesting schedule.
+   *
+   * Tokens unlock at discrete milestones. All milestones must sum to exactly
+   * 10 000 bps. The last milestone's `offsetDays` defines the total duration.
+   *
+   * @param params - Graded schedule parameters including milestone list
+   * @param signer - Function that signs the transaction XDR (e.g. Freighter's signTransaction)
+   * @returns Transaction hash
+   */
+  async createGradedSchedule(
+    params: CreateGradedScheduleParams,
+    signer: (xdr: string, opts: { networkPassphrase: string }) => Promise<string | { signedTxXdr: string }>
+  ): Promise<string> {
+    const totalStroops = BigInt(Math.round(params.totalAmountXlm * 10_000_000));
+    const lockupSecs = params.lockupDays * 86400;
+
+    const milestonesVal = xdr.ScVal.scvVec(
+      params.milestones.map((m) => {
+        const offsetSecs = BigInt(m.offsetDays * 86400);
+        return xdr.ScVal.scvMap([
+          new xdr.ScMapEntry({
+            key: xdr.ScVal.scvSymbol("bps"),
+            val: nativeToScVal(m.bps, { type: "u32" }),
+          }),
+          new xdr.ScMapEntry({
+            key: xdr.ScVal.scvSymbol("offset_secs"),
+            val: nativeToScVal(offsetSecs, { type: "u64" }),
+          }),
+        ]);
+      })
+    );
+
+    const args: xdr.ScVal[] = [
+      nativeToScVal(params.grantor, { type: "address" }),
+      nativeToScVal(params.beneficiary, { type: "address" }),
+      nativeToScVal(this.nativeToken, { type: "address" }),
+      nativeToScVal(totalStroops, { type: "i128" }),
+      nativeToScVal(params.startTime, { type: "u64" }),
+      nativeToScVal(lockupSecs, { type: "u64" }),
+      nativeToScVal(params.revocable, { type: "bool" }),
+      milestonesVal,
+    ];
+    return this.buildAndSend(params.grantor, "create_graded_schedule", args, signer);
   }
 
   /**

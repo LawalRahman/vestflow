@@ -17,6 +17,7 @@ import {
   formatDate,
 } from "@/lib/stellar";
 import { useWallet } from "@/lib/WalletContext";
+import { useAddressBook } from "@/hooks/useAddressBook";
 import Link from "next/link";
 import { buildCombinedExportCSV, downloadCSV } from "@/lib/csvExport";
 
@@ -31,6 +32,7 @@ interface BeneficiaryStats {
 
 export default function BeneficiaryDashboardPage() {
   const { publicKey } = useWallet();
+  const { getLabel } = useAddressBook();
   const [schedules, setSchedules] = useState<ScheduleData[]>([]);
   const [stats, setStats] = useState<BeneficiaryStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -104,9 +106,11 @@ export default function BeneficiaryDashboardPage() {
   const searchFiltered = useMemo(() => {
     if (!q) return sortedSchedules;
     return sortedSchedules.filter(
-      s => s.grantor.toLowerCase().includes(q)
+      s =>
+        s.grantor.toLowerCase().includes(q) ||
+        (getLabel(s.grantor) ?? "").toLowerCase().includes(q)
     );
-  }, [sortedSchedules, q]);
+  }, [sortedSchedules, q, getLabel]);
 
   // Reset to page 1 whenever the filtered set changes
   useEffect(() => { setPage(1); }, [searchFiltered.length, sortBy]);
@@ -198,9 +202,9 @@ export default function BeneficiaryDashboardPage() {
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search by grantor address…"
+            placeholder="Search by grantor address or label…"
             className="input pr-8"
-            aria-label="Search schedules by grantor address"
+            aria-label="Search schedules by grantor address or label"
           />
           {query && (
             <button

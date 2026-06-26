@@ -19,6 +19,7 @@ import {
 } from "@/lib/stellar";
 import { useWallet } from "@/lib/WalletContext";
 import { useCountUp } from "@/hooks/useCountUp";
+import { useAddressBook } from "@/hooks/useAddressBook";
 import Link from "next/link";
 import { useXlmPrice, formatUsd } from "@/lib/price";
 import { buildCombinedExportCSV, downloadCSV } from "@/lib/csvExport";
@@ -113,6 +114,7 @@ function AnimatedStats({ stats }: { stats: DashboardStats }) {
 
 export default function DashboardPage() {
   const { publicKey } = useWallet();
+  const { getLabel } = useAddressBook();
   const [schedules, setSchedules] = useState<ScheduleData[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(false);
@@ -216,9 +218,11 @@ export default function DashboardPage() {
     return sortedSchedules.filter(
       s =>
         s.grantor.toLowerCase().includes(q) ||
-        s.beneficiary.toLowerCase().includes(q)
+        s.beneficiary.toLowerCase().includes(q) ||
+        (getLabel(s.grantor) ?? "").toLowerCase().includes(q) ||
+        (getLabel(s.beneficiary) ?? "").toLowerCase().includes(q)
     );
-  }, [sortedSchedules, q]);
+  }, [sortedSchedules, q, getLabel]);
 
   // Reset to page 1 whenever the filtered set changes
   useEffect(() => { setPage(1); }, [searchFiltered.length, roleFilter, sortBy, assetFilter]);
@@ -363,9 +367,9 @@ export default function DashboardPage() {
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search by address…"
+            placeholder="Search by address or label…"
             className="input pr-8"
-            aria-label="Search schedules by address"
+            aria-label="Search schedules by address or label"
           />
           {query && (
             <button

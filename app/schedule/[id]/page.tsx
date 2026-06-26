@@ -3,6 +3,7 @@ import Navbar from "@/components/Navbar";
 import CopyButton from "@/components/CopyButton";
 import VestingChart from "@/components/VestingChart";
 import NotificationSubscription from "@/components/NotificationSubscription";
+import AddressLabel from "@/components/AddressLabel";
 import { formatCliffDate, formatDate, NETWORK } from "@/lib/stellar";
 import { useXlmPrice, formatUsd } from "@/lib/price";
 import Link from "next/link";
@@ -64,10 +65,6 @@ export default function PublicSchedulePage() {
 
     loadSchedule();
   }, [scheduleId]);
-
-  const formatAddress = (addr: string) => {
-    return addr.slice(0, 6) + "..." + addr.slice(-4);
-  };
 
   const vestingProgress = () => {
     if (!schedule) return 0;
@@ -262,7 +259,13 @@ export default function PublicSchedulePage() {
               <h3 className="font-semibold">Grantor (Issuer)</h3>
               <CopyButton value={schedule.grantor} label="Copy grantor address" />
             </div>
-            <p className="font-mono text-sm break-all text-zinc-300">{schedule.grantor}</p>
+            <AddressLabel
+              address={schedule.grantor}
+              fullAddress
+              editable
+              className="mt-1"
+              secondaryClassName="text-xs font-mono text-zinc-500 break-all"
+            />
             <a
               href={`https://stellar.expert/explorer/${NETWORK}/account/${schedule.grantor}`}
               target="_blank"
@@ -278,7 +281,13 @@ export default function PublicSchedulePage() {
               <h3 className="font-semibold">Beneficiary (Recipient)</h3>
               <CopyButton value={schedule.beneficiary} label="Copy beneficiary address" />
             </div>
-            <p className="font-mono text-sm break-all text-zinc-300">{schedule.beneficiary}</p>
+            <AddressLabel
+              address={schedule.beneficiary}
+              fullAddress
+              editable
+              className="mt-1"
+              secondaryClassName="text-xs font-mono text-zinc-500 break-all"
+            />
             <a
               href={`https://stellar.expert/explorer/${NETWORK}/account/${schedule.beneficiary}`}
               target="_blank"
