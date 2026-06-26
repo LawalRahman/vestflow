@@ -20,6 +20,7 @@ import type {
   ScheduleData,
   VestflowConfig,
   CreateScheduleParams,
+  CreateGradedScheduleParams,
   VestingKind,
 } from "./types";
 
@@ -344,6 +345,52 @@ export class VestflowClient {
       nativeToScVal(params.revocable, { type: "bool" }),
     ];
     return this.buildAndSend(params.grantor, "create_schedule", args, signer);
+  }
+
+  /**
+   * Create a new graded (percentage-based) vesting schedule.
+   *
+   * Tokens unlock at discrete milestones. All milestones must sum to exactly
+   * 10 000 bps. The last milestone's `offsetDays` defines the total duration.
+   *
+   * @param params - Graded schedule parameters including milestone list
+   * @param signer - Function that signs the transaction XDR (e.g. Freighter's signTransaction)
+   * @returns Transaction hash
+   */
+  async createGradedSchedule(
+    params: CreateGradedScheduleParams,
+    signer: (xdr: string, opts: { networkPassphrase: string }) => Promise<string | { signedTxXdr: string }>
+  ): Promise<string> {
+    const totalStroops = BigInt(Math.round(params.totalAmountXlm * 10_000_000));
+    const lockupSecs = params.lockupDays * 86400;
+
+    const milestonesVal = xdr.ScVal.scvVec(
+      params.milestones.map((m) => {
+        const offsetSecs = BigInt(m.offsetDays * 86400);
+        return xdr.ScVal.scvMap([
+          new xdr.ScMapEntry({
+            key: xdr.ScVal.scvSymbol("bps"),
+            val: nativeToScVal(m.bps, { type: "u32" }),
+          }),
+          new xdr.ScMapEntry({
+            key: xdr.ScVal.scvSymbol("offset_secs"),
+            val: nativeToScVal(offsetSecs, { type: "u64" }),
+          }),
+        ]);
+      })
+    );
+
+    const args: xdr.ScVal[] = [
+      nativeToScVal(params.grantor, { type: "address" }),
+      nativeToScVal(params.beneficiary, { type: "address" }),
+      nativeToScVal(this.nativeToken, { type: "address" }),
+      nativeToScVal(totalStroops, { type: "i128" }),
+      nativeToScVal(params.startTime, { type: "u64" }),
+      nativeToScVal(lockupSecs, { type: "u64" }),
+      nativeToScVal(params.revocable, { type: "bool" }),
+      milestonesVal,
+    ];
+    return this.buildAndSend(params.grantor, "create_graded_schedule", args, signer);
   }
 
   /**
