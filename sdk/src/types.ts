@@ -39,6 +39,12 @@ export interface ScheduleData {
   revocable: boolean;
   /** Whether this schedule has been revoked. */
   revoked: boolean;
+  /** Whether this schedule is currently paused. */
+  paused: boolean;
+  /** Cumulative time (in seconds) the schedule has been paused. */
+  paused_duration: number;
+  /** Unix timestamp when the schedule was last paused (0 if not paused). */
+  paused_at: number;
 }
 
 /**
