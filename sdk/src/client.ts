@@ -23,6 +23,7 @@ import type {
   CreateGradedScheduleParams,
   VestingKind,
 } from "./types";
+import { xlmToStroops } from "./utils";
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -67,7 +68,7 @@ const FALLBACK_ACCOUNT = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCW
  * const hash = await client.createSchedule({
  *   grantor: "G...",
  *   beneficiary: "G...",
- *   totalAmountXlm: 1000,
+ *   totalAmountXlm: "1000",
  *   startTime: Math.floor(Date.now() / 1000),
  *   durationDays: 365,
  *   cliffDays: 90,
@@ -372,7 +373,7 @@ export class VestflowClient {
     params: CreateScheduleParams,
     signer: (xdr: string, opts: { networkPassphrase: string }) => Promise<string | { signedTxXdr: string }>
   ): Promise<string> {
-    const totalStroops = BigInt(Math.round(params.totalAmountXlm * 10_000_000));
+    const totalStroops = xlmToStroops(params.totalAmountXlm);
     const durationSecs = params.durationDays * 86400;
     const cliffSecs = params.cliffDays * 86400;
     const kindVal = xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(params.kind)]);

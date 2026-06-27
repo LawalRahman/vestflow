@@ -81,8 +81,8 @@ export interface CreateScheduleParams {
   grantor: string;
   /** Stellar public key of the beneficiary. */
   beneficiary: string;
-  /** Total amount to vest in XLM (converted to stroops internally). */
-  totalAmountXlm: number;
+  /** Total amount to vest in XLM as a decimal string (converted to stroops internally). */
+  totalAmountXlm: string;
   /** Unix timestamp when vesting begins. */
   startTime: number;
   /** Vesting duration in days. */
